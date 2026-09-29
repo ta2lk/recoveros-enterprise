@@ -1,11 +1,4 @@
-/**
- * RecoverOS - Enterprise Multi-Tenant Database Client
- * 
- * Rules:
- * 1. Row-Level Security by tenant_id on every table.
- * 2. Tenant is derived from the authenticated session ONLY, NEVER from a request header.
- * 3. Fail closed on any security or tenant validation error.
- */
+import { Pool, PoolClient } from 'pg';
 
 export interface AuthenticatedSession {
   sessionId: string;
@@ -28,37 +21,115 @@ export interface TenantScopedRecord {
   [key: string]: any;
 }
 
+type TransactionCallback<T> = (client: PoolClient, tenantId: string) => Promise<T>;
+
+const RUNTIME_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS recoveros_schema_migrations (
+  version VARCHAR(128) PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS recoveros_runtime_records (
+  table_name VARCHAR(128) NOT NULL,
+  id VARCHAR(255) NOT NULL,
+  tenant_id VARCHAR(64) NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (table_name, id)
+);
+
+ALTER TABLE recoveros_runtime_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recoveros_runtime_records FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS recoveros_runtime_tenant_isolation ON recoveros_runtime_records;
+CREATE POLICY recoveros_runtime_tenant_isolation
+  ON recoveros_runtime_records
+  USING (tenant_id = current_setting('app.current_tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true));
+CREATE INDEX IF NOT EXISTS idx_recoveros_runtime_tenant_table
+  ON recoveros_runtime_records (tenant_id, table_name);
+
+INSERT INTO recoveros_schema_migrations (version)
+VALUES ('0001_runtime_records')
+ON CONFLICT (version) DO NOTHING;
+`;
+
+function serialize(value: unknown): string {
+  return JSON.stringify(value, (_key, item) =>
+    typeof item === 'bigint' ? { __recoveros_bigint__: item.toString() } : item
+  );
+}
+
+function deserialize<T>(value: unknown): T {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return JSON.parse(text, (_key, item) => {
+    if (item && typeof item === 'object' && '__recoveros_bigint__' in item) {
+      return BigInt(item.__recoveros_bigint__);
+    }
+    return item;
+  }) as T;
+}
+
 export class DatabaseClient {
-  private tables: Map<string, Map<string, TenantScopedRecord>> = new Map();
+  private readonly tables = new Map<string, Map<string, TenantScopedRecord>>();
+  private readonly pool?: Pool;
+  private initialized = false;
 
   constructor() {
     this.initTables([
-      'tenants',
-      'users',
-      'suppliers',
-      'contracts',
-      'purchase_orders',
-      'po_lines',
-      'goods_receipts',
-      'invoices',
-      'invoice_lines',
-      'payments',
-      'opportunities',
-      'claims',
-      'ingestion_jobs',
-      'dead_letter_queue',
-      'audit_log_entries',
+      'tenants', 'users', 'suppliers', 'contracts', 'purchase_orders', 'po_lines',
+      'goods_receipts', 'invoices', 'invoice_lines', 'payments', 'opportunities',
+      'claims', 'ingestion_jobs', 'dead_letter_queue', 'audit_log_entries',
     ]);
+
+    if (process.env.DATABASE_URL) {
+      this.pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        max: Number(process.env.DATABASE_POOL_MAX || 10),
+        idleTimeoutMillis: 30_000,
+        connectionTimeoutMillis: 5_000,
+        ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: true } : undefined,
+      });
+    }
   }
 
   private initTables(tableNames: string[]) {
-    tableNames.forEach((t) => this.tables.set(t, new Map()));
+    tableNames.forEach((table) => this.tables.set(table, new Map()));
   }
 
-  /**
-   * Derive tenant strictly from the authenticated session.
-   * Throws SecurityViolationError if session is invalid or header spoofing is attempted.
-   */
+  get usesPostgres(): boolean {
+    return Boolean(this.pool);
+  }
+
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    if (!this.pool) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('DATABASE_URL is required in production; refusing to use in-memory persistence.');
+      }
+      this.initialized = true;
+      return;
+    }
+
+    await this.pool.query(RUNTIME_SCHEMA_SQL);
+    await this.pool.query('SELECT 1');
+    this.initialized = true;
+  }
+
+  async checkHealth(): Promise<{ connected: boolean; mode: 'postgres' | 'memory' }> {
+    if (!this.pool) return { connected: process.env.NODE_ENV !== 'production', mode: 'memory' };
+    try {
+      await this.pool.query('SELECT 1');
+      return { connected: true, mode: 'postgres' };
+    } catch {
+      return { connected: false, mode: 'postgres' };
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.pool) await this.pool.end();
+  }
+
   private extractTenantFromSession(session: AuthenticatedSession): string {
     if (!session || !session.tenantId || typeof session.tenantId !== 'string') {
       throw new SecurityViolationError('Unauthorized: No valid authenticated tenant session found.');
@@ -69,135 +140,129 @@ export class DatabaseClient {
     return session.tenantId;
   }
 
-  /**
-   * Insert record with strict RLS enforcement
-   */
+  private async withTenant<T>(session: AuthenticatedSession, callback: TransactionCallback<T>): Promise<T> {
+    const tenantId = this.extractTenantFromSession(session);
+    if (!this.pool) throw new Error('PostgreSQL transaction requested without a configured pool.');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.current_tenant_id', $1, true)", [tenantId]);
+      const result = await callback(client, tenantId);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async insert<T extends TenantScopedRecord>(
     tableName: string,
     session: AuthenticatedSession,
     data: Omit<T, 'tenantId'> & { tenantId?: string }
   ): Promise<T> {
     const authorizedTenantId = this.extractTenantFromSession(session);
-
-    // If caller explicitly passed a conflicting tenantId, reject immediately (spoofing attempt)
     if (data.tenantId && data.tenantId !== authorizedTenantId) {
-      throw new SecurityViolationError(
-        `Cross-tenant write rejected! Session tenant '${authorizedTenantId}' cannot write to tenant '${data.tenantId}'.`
-      );
+      throw new SecurityViolationError(`Cross-tenant write rejected! Session tenant '${authorizedTenantId}' cannot write to tenant '${data.tenantId}'.`);
     }
+    const record = { ...(data as any), tenantId: authorizedTenantId } as T;
 
-    const table = this.tables.get(tableName);
-    if (!table) {
-      throw new Error(`DB_TABLE_NOT_FOUND: Table '${tableName}' does not exist.`);
+    if (this.pool) {
+      await this.withTenant(session, async (client) => {
+        await client.query(
+          `INSERT INTO recoveros_runtime_records (table_name, id, tenant_id, data)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [tableName, record.id, authorizedTenantId, serialize(record)]
+        );
+      });
+    } else {
+      const table = this.tables.get(tableName);
+      if (!table) throw new Error(`DB_TABLE_NOT_FOUND: Table '${tableName}' does not exist.`);
+      table.set(record.id, record);
     }
-
-    const record: T = {
-      ...(data as any),
-      tenantId: authorizedTenantId,
-    };
-
-    table.set(record.id, record);
     return record;
   }
 
-  /**
-   * Find record by ID with strict RLS enforcement.
-   * If record belongs to another tenant, returns null (or throws in strict mode).
-   */
-  async findById<T extends TenantScopedRecord>(
-    tableName: string,
-    session: AuthenticatedSession,
-    id: string
-  ): Promise<T | null> {
+  async findById<T extends TenantScopedRecord>(tableName: string, session: AuthenticatedSession, id: string): Promise<T | null> {
     const authorizedTenantId = this.extractTenantFromSession(session);
-    const table = this.tables.get(tableName);
-    if (!table) return null;
-
-    const record = table.get(id);
-    if (!record) return null;
-
-    // RLS Enforcement: If record belongs to another tenant, deny access
-    if (record.tenantId !== authorizedTenantId) {
-      throw new SecurityViolationError(
-        `Cross-tenant read rejected! Tenant '${authorizedTenantId}' cannot read resource '${id}' belonging to tenant '${record.tenantId}'.`
-      );
+    if (this.pool) {
+      return this.withTenant(session, async (client) => {
+        const result = await client.query(
+          `SELECT data FROM recoveros_runtime_records
+           WHERE table_name = $1 AND id = $2 AND tenant_id = $3`,
+          [tableName, id, authorizedTenantId]
+        );
+        return result.rows[0] ? deserialize<T>(result.rows[0].data) : null;
+      });
     }
 
+    const record = this.tables.get(tableName)?.get(id);
+    if (!record) return null;
+    if (record.tenantId !== authorizedTenantId) {
+      throw new SecurityViolationError(`Cross-tenant read rejected! Tenant '${authorizedTenantId}' cannot read resource '${id}' belonging to tenant '${record.tenantId}'.`);
+    }
     return record as T;
   }
 
-  /**
-   * Query records filtered by tenant_id automatically
-   */
-  async findMany<T extends TenantScopedRecord>(
-    tableName: string,
-    session: AuthenticatedSession,
-    filterFn?: (record: T) => boolean
-  ): Promise<T[]> {
+  async findMany<T extends TenantScopedRecord>(tableName: string, session: AuthenticatedSession, filterFn?: (record: T) => boolean): Promise<T[]> {
     const authorizedTenantId = this.extractTenantFromSession(session);
-    const table = this.tables.get(tableName);
-    if (!table) return [];
-
-    const results: T[] = [];
-    for (const record of table.values()) {
-      if (record.tenantId === authorizedTenantId) {
-        if (!filterFn || filterFn(record as T)) {
-          results.push(record as T);
-        }
-      }
+    if (this.pool) {
+      return this.withTenant(session, async (client) => {
+        const result = await client.query(
+          `SELECT data FROM recoveros_runtime_records
+           WHERE table_name = $1 AND tenant_id = $2 ORDER BY created_at ASC`,
+          [tableName, authorizedTenantId]
+        );
+        const records = result.rows.map((row) => deserialize<T>(row.data));
+        return filterFn ? records.filter(filterFn) : records;
+      });
     }
 
-    return results;
+    const records = [...(this.tables.get(tableName)?.values() || [])]
+      .filter((record) => record.tenantId === authorizedTenantId) as T[];
+    return filterFn ? records.filter(filterFn) : records;
   }
 
-  /**
-   * Update record with strict RLS enforcement
-   */
-  async update<T extends TenantScopedRecord>(
-    tableName: string,
-    session: AuthenticatedSession,
-    id: string,
-    updates: Partial<T>
-  ): Promise<T> {
+  async update<T extends TenantScopedRecord>(tableName: string, session: AuthenticatedSession, id: string, updates: Partial<T>): Promise<T> {
     const existing = await this.findById<T>(tableName, session, id);
-    if (!existing) {
-      throw new Error(`NOT_FOUND: Record '${id}' does not exist.`);
-    }
-
-    // Invariant: Tenant ID can NEVER be changed
+    if (!existing) throw new Error(`NOT_FOUND: Record '${id}' does not exist.`);
     if (updates.tenantId && updates.tenantId !== existing.tenantId) {
       throw new SecurityViolationError('Cannot alter tenantId of an existing record.');
     }
+    const updated = { ...existing, ...updates, tenantId: existing.tenantId } as T;
 
-    const updated: T = {
-      ...existing,
-      ...updates,
-      tenantId: existing.tenantId, // Immutable
-    };
-
-    const table = this.tables.get(tableName)!;
-    table.set(id, updated);
+    if (this.pool) {
+      await this.withTenant(session, async (client) => {
+        await client.query(
+          `UPDATE recoveros_runtime_records SET data = $1::jsonb, updated_at = NOW()
+           WHERE table_name = $2 AND id = $3`,
+          [serialize(updated), tableName, id]
+        );
+      });
+    } else {
+      this.tables.get(tableName)?.set(id, updated);
+    }
     return updated;
   }
 
-  /**
-   * Delete record with strict RLS enforcement
-   */
   async delete(tableName: string, session: AuthenticatedSession, id: string): Promise<boolean> {
-    const existing = await this.findById(tableName, session, id);
+    const existing = await this.findById<TenantScopedRecord>(tableName, session, id);
     if (!existing) return false;
-
-    const table = this.tables.get(tableName)!;
-    return table.delete(id);
+    if (this.pool) {
+      const result = await this.withTenant(session, (client) => client.query(
+        `DELETE FROM recoveros_runtime_records WHERE table_name = $1 AND id = $2`,
+        [tableName, id]
+      ));
+      return result.rowCount === 1;
+    }
+    return this.tables.get(tableName)?.delete(id) || false;
   }
 
-  /**
-   * Clear all records (testing only)
-   */
   clear() {
-    this.tables.forEach((map) => map.clear());
+    this.tables.forEach((table) => table.clear());
   }
 }
 
-// Global persistent database client instance
 export const db = new DatabaseClient();

@@ -41,17 +41,14 @@ app.get('/healthz', (req, res) => {
   res.status(200).json({ status: 'HEALTHY', timestamp: new Date().toISOString() });
 });
 
-app.get('/ready', (req, res) => {
-  // The current repository uses in-memory services; never report production
-  // readiness until a durable database is configured and connected.
-  const durablePersistenceConfigured = Boolean(process.env.DATABASE_URL);
-  // DATABASE_URL alone is not a connection check. This phase still has no
-  // PostgreSQL adapter, so production must remain NOT_READY rather than lie.
-  const ready = !isProduction;
+app.get('/ready', async (req, res) => {
+  const database = await db.checkHealth();
+  const ready = database.connected && (isProduction ? database.mode === 'postgres' : true);
   res.status(ready ? 200 : 503).json({
     status: ready ? 'READY' : 'NOT_READY',
+    database: database.connected ? 'CONNECTED' : 'DISCONNECTED',
+    persistenceMode: database.mode,
     services: ['database', 'matching-engine', 'agents', 'ingestion-queue'],
-    durablePersistenceConfigured,
   });
 });
 
@@ -237,7 +234,8 @@ app.get('*', (req, res) => {
 });
 
 // If not in Vite dev mode, start server
-if (process.env.NODE_ENV === 'production') {
+if (isProduction) {
+  await db.initialize();
   app.listen(port, () => {
     console.log(`RecoverOS Enterprise Server listening on port ${port}`);
   });
