@@ -21,6 +21,34 @@ Authentication uses `auth_users` and `auth_sessions`: passwords are stored as No
 
 Documents use a durable S3-compatible object store. The encrypted bytes are written under `tenants/{tenant}/documents/{document}.bin`; PostgreSQL stores only the tenant-scoped envelope metadata in `document_objects`. The payload is encrypted with a unique AES-256-GCM DEK, the DEK is wrapped by `RECOVEROS_MASTER_KEK_HEX`, and production uploads additionally require S3 server-side encryption with `OBJECT_STORAGE_SSE_KMS_KEY_ID`. In production, do not use `OBJECT_STORAGE_DRIVER=filesystem`.
 
+## Backup and restore
+
+Backups are created with a dedicated database credential, not the application credential. The backup role must have `BYPASSRLS` and read access to the RecoverOS schema; keep it in a secret manager and restrict its network access. Configure `BACKUP_DATABASE_URL` separately from `DATABASE_URL`.
+
+```bash
+BACKUP_DATABASE_URL="postgresql://backup-user:...@postgres:5432/recoveros" \
+OBJECT_STORAGE_BUCKET="recoveros-documents" \
+BACKUP_UPLOAD=true \
+npm run ops:backup
+```
+
+`ops:backup` creates a PostgreSQL custom-format dump, copies encrypted object bytes, writes SHA-256 checksums in `manifest.json`, and can upload the complete artifact under `backups/{backupId}` with SSE-KMS. Restore is deliberately guarded:
+
+```bash
+CONFIRM_RESTORE=YES \
+RESTORE_DATABASE_URL="postgresql://backup-user:...@postgres:5432/recoveros" \
+npm run ops:restore -- /secure/backup/path/manifest.json
+```
+
+The restore command validates the database dump and every object checksum before restoring. Test restore into an isolated database and bucket prefix on a scheduled basis; do not restore over production without an approved change window.
+
+## Observability
+
+- `GET /healthz` is a liveness probe and does not depend on external services.
+- `GET /ready` checks PostgreSQL and Object Storage connectivity; production requires PostgreSQL and S3 mode.
+- `GET /metrics` exposes Prometheus-compatible request counters, error counters, duration summaries, and database health checks.
+- Every response includes `X-Request-ID`; structured JSON request logs include method, route, status, duration, and request ID without credentials or document content.
+
 Login protection is enabled by default:
 
 - Per-process rate limiting tracks email and source IP: 10 attempts per 15-minute window.

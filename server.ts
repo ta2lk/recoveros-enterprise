@@ -12,6 +12,7 @@ import { AuditLogService } from './src/db/auditLog';
 import { IngestionQueueService } from './src/ingestion/queue';
 import { EncryptedDocumentStorage } from './src/storage/encryptedStorage';
 import { db } from './src/db/client';
+import { metrics, prometheusMetrics, requestObservability } from './src/observability/metrics';
 
 dotenv.config();
 
@@ -38,6 +39,7 @@ if (isProduction && (!process.env.OBJECT_STORAGE_BUCKET || !process.env.OBJECT_S
 }
 
 app.disable('x-powered-by');
+app.use(requestObservability);
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -49,18 +51,26 @@ app.use(express.json({ limit: '10mb' }));
 
 // Liveness & Readiness Checks (Section 42)
 app.get('/healthz', (req, res) => {
-  res.status(200).json({ status: 'HEALTHY', timestamp: new Date().toISOString() });
+  res.status(200).json({ status: 'HEALTHY', timestamp: new Date().toISOString(), uptimeSeconds: Math.round(process.uptime()) });
 });
 
 app.get('/ready', async (req, res) => {
   const database = await db.checkHealth();
-  const ready = database.connected && (isProduction ? database.mode === 'postgres' : true);
+  const objectStorage = await EncryptedDocumentStorage.checkHealth();
+  const ready = database.connected && objectStorage.connected && (isProduction ? database.mode === 'postgres' && objectStorage.mode === 's3' : true);
+  metrics.dbHealth.inc({ connected: database.connected ? 'true' : 'false', mode: database.mode });
   res.status(ready ? 200 : 503).json({
     status: ready ? 'READY' : 'NOT_READY',
     database: database.connected ? 'CONNECTED' : 'DISCONNECTED',
     persistenceMode: database.mode,
+    objectStorage: objectStorage.connected ? 'CONNECTED' : 'DISCONNECTED',
+    objectStorageMode: objectStorage.mode,
     services: ['database', 'matching-engine', 'agents', 'ingestion-queue'],
   });
+});
+
+app.get('/metrics', (req, res) => {
+  res.type('text/plain; version=0.0.4').send(prometheusMetrics());
 });
 
 // API v1 Health & Metadata

@@ -16,7 +16,9 @@
     "test:postgres:auth": "tsx test/postgres_auth.test.ts",
     "test:postgres:provisioning": "tsx test/postgres_provisioning.test.ts",
     "test:postgres:security": "tsx test/postgres_security_controls.test.ts",
-    "test:postgres:storage": "tsx test/postgres_storage.test.ts"
+    "test:postgres:storage": "tsx test/postgres_storage.test.ts",
+    "ops:backup": "tsx scripts/backup.ts",
+    "ops:restore": "tsx scripts/restore.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1142.0",

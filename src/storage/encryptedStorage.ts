@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { AuthenticatedSession, db, SecurityViolationError } from '../db/client';
 
 export const EICAR_TEST_SIGNATURE = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
@@ -146,4 +146,13 @@ export class EncryptedDocumentStorage {
   }
 
   static clear() { this.documentStore.clear(); }
+
+  static async checkHealth(): Promise<{ connected: boolean; mode: 'memory' | 's3' | 'filesystem' }> {
+    const mode = this.backend();
+    try {
+      if (mode === 's3') await this.getS3().send(new HeadBucketCommand({ Bucket: process.env.OBJECT_STORAGE_BUCKET! }));
+      if (mode === 'filesystem') await mkdir(process.env.OBJECT_STORAGE_LOCAL_DIR || path.join(process.cwd(), '.object-storage'), { recursive: true });
+      return { connected: true, mode };
+    } catch { return { connected: false, mode }; }
+  }
 }
