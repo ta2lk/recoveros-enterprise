@@ -19,6 +19,8 @@ The first startup applies the versioned `0001_runtime_records` and `0002_authent
 
 Authentication uses `auth_users` and `auth_sessions`: passwords are stored as Node.js `scrypt` hashes, bearer tokens are random opaque values whose SHA-256 hashes are stored, and logout marks sessions revoked in PostgreSQL. The client never supplies the authenticated tenant or role.
 
+Documents use a durable S3-compatible object store. The encrypted bytes are written under `tenants/{tenant}/documents/{document}.bin`; PostgreSQL stores only the tenant-scoped envelope metadata in `document_objects`. The payload is encrypted with a unique AES-256-GCM DEK, the DEK is wrapped by `RECOVEROS_MASTER_KEK_HEX`, and production uploads additionally require S3 server-side encryption with `OBJECT_STORAGE_SSE_KMS_KEY_ID`. In production, do not use `OBJECT_STORAGE_DRIVER=filesystem`.
+
 Login protection is enabled by default:
 
 - Per-process rate limiting tracks email and source IP: 10 attempts per 15-minute window.

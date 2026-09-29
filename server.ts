@@ -33,6 +33,9 @@ const appendAudit = (session: AuthenticatedRequest['sessionContext'], entryData:
 if (isProduction && !/^[0-9a-fA-F]{64}$/.test(process.env.RECOVEROS_MASTER_KEK_HEX || '')) {
   throw new Error('RECOVEROS_MASTER_KEK_HEX must be configured as a 32-byte hex secret before production startup.');
 }
+if (isProduction && (!process.env.OBJECT_STORAGE_BUCKET || !process.env.OBJECT_STORAGE_SSE_KMS_KEY_ID)) {
+  throw new Error('OBJECT_STORAGE_BUCKET and OBJECT_STORAGE_SSE_KMS_KEY_ID are required before production startup.');
+}
 
 app.disable('x-powered-by');
 app.use((req, res, next) => {

@@ -15,9 +15,11 @@
     "test:postgres:audit-queue": "tsx test/postgres_audit_queue.test.ts",
     "test:postgres:auth": "tsx test/postgres_auth.test.ts",
     "test:postgres:provisioning": "tsx test/postgres_provisioning.test.ts",
-    "test:postgres:security": "tsx test/postgres_security_controls.test.ts"
+    "test:postgres:security": "tsx test/postgres_security_controls.test.ts",
+    "test:postgres:storage": "tsx test/postgres_storage.test.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1142.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
@@ -32,6 +34,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/pg": "^8.15.5",
     "@types/react": "^19.3.0",
@@ -40,7 +43,6 @@
     "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "@types/express": "^4.17.21"
+    "typescript": "^7.0.2"
   }
 }

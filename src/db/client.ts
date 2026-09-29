@@ -129,7 +129,7 @@ export class DatabaseClient {
     this.initTables([
       'tenants', 'users', 'suppliers', 'contracts', 'purchase_orders', 'po_lines',
       'goods_receipts', 'invoices', 'invoice_lines', 'payments', 'opportunities',
-      'claims', 'ingestion_jobs', 'dead_letter_queue', 'audit_log_entries', 'sessions',
+      'claims', 'ingestion_jobs', 'dead_letter_queue', 'audit_log_entries', 'sessions', 'document_objects',
     ]);
 
     if (process.env.DATABASE_URL) {
