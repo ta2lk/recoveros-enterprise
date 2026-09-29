@@ -114,3 +114,17 @@ The image builds the browser bundle and server bundle separately, runs as a non-
   - Readiness: `GET /ready`
 - **Required Secrets**: `DATABASE_URL`, `RECOVEROS_MASTER_KEK_HEX`, and optionally `GEMINI_API_KEY`.
 - **Database**: Use an external managed PostgreSQL service, not a database container inside the application runtime.
+
+## 5. Render production deployment
+
+`render.yaml` is an infrastructure-as-code blueprint for the RecoverOS web service and a PostgreSQL 16 instance in Frankfurt. It intentionally marks encryption, Object Storage, and AI credentials as `sync: false`; enter those values through Render's secret environment-variable UI, never in Git.
+
+Before creating the Render resources:
+
+1. Create an S3-compatible bucket in `eu-central-1`, enable versioning, block public access, and create/choose a KMS key. Grant the Render runtime identity only `PutObject`, `GetObject`, `HeadObject`, and KMS encrypt/decrypt permissions for the document prefix.
+2. Generate `RECOVEROS_MASTER_KEK_HEX` with `openssl rand -hex 32` and store it in a secret manager. This key must remain stable for the lifetime of encrypted documents.
+3. Create a separate PostgreSQL backup role with `BYPASSRLS` and configure `BACKUP_DATABASE_URL` outside the application service.
+4. Add the Render secrets listed in `render.yaml`, deploy, and wait for `/ready` to return HTTP 200.
+5. Run an isolated backup and restore drill before allowing production traffic.
+
+The blueprint currently assumes `frankfurt`, Render `starter` web service, and `basic_256mb` PostgreSQL. These are editable choices; changing region or plan changes cost, latency, and capacity. Do not apply the blueprint until the region, plan, and Object Storage/KMS account are confirmed.

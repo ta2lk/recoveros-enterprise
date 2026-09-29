@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 # Copy application source
 COPY . .
@@ -23,7 +23,7 @@ ENV PORT=3000
 
 # Install production dependencies only
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/dist-server ./dist-server
@@ -31,6 +31,8 @@ COPY --from=builder /app/dist-server ./dist-server
 # Non-root user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
+
+STOPSIGNAL SIGTERM
 
 EXPOSE 3000
 

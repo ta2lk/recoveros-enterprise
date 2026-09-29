@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: recoveros-enterprise
+    runtime: docker
+    repo: https://github.com/ta2lk/recoveros-enterprise
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+    healthCheckPath: /ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: recoveros-postgres
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "true"
+      - key: RECOVEROS_MASTER_KEK_HEX
+        sync: false
+      - key: OBJECT_STORAGE_BUCKET
+        sync: false
+      - key: OBJECT_STORAGE_REGION
+        value: eu-central-1
+      - key: OBJECT_STORAGE_ENDPOINT
+        sync: false
+      - key: OBJECT_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: OBJECT_STORAGE_SSE_KMS_KEY_ID
+        sync: false
+      - key: OBJECT_STORAGE_FORCE_PATH_STYLE
+        value: "false"
+      - key: GEMINI_API_KEY
+        sync: false
+
+databases:
+  - name: recoveros-postgres
+    databaseName: recoveros
+    user: recoveros
+    plan: basic_256mb
+    region: frankfurt
+    postgresMajorVersion: "16"
+    diskSizeGB: 10
