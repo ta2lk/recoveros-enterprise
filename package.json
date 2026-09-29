@@ -14,7 +14,8 @@
     "test:postgres": "tsx test/postgres_persistence.test.ts",
     "test:postgres:audit-queue": "tsx test/postgres_audit_queue.test.ts",
     "test:postgres:auth": "tsx test/postgres_auth.test.ts",
-    "test:postgres:provisioning": "tsx test/postgres_provisioning.test.ts"
+    "test:postgres:provisioning": "tsx test/postgres_provisioning.test.ts",
+    "test:postgres:security": "tsx test/postgres_security_controls.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

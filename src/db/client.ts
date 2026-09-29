@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS auth_users (
   role VARCHAR(32) NOT NULL,
   status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
   password_hash VARCHAR(255) NOT NULL,
+  failed_login_attempts INT NOT NULL DEFAULT 0,
+  locked_until TIMESTAMPTZ,
+  mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  mfa_secret_ciphertext TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_login_at TIMESTAMPTZ
 );
@@ -62,6 +66,10 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   revoked_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions (token_hash);
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS failed_login_attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS mfa_secret_ciphertext TEXT;
 
 ALTER TABLE recoveros_runtime_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recoveros_runtime_records FORCE ROW LEVEL SECURITY;
@@ -181,7 +189,7 @@ export class DatabaseClient {
       return null;
     }
     const result = await this.pool.query(
-      `SELECT id, tenant_id, email, name, role, status, password_hash, created_at, last_login_at
+      `SELECT id, tenant_id, email, name, role, status, password_hash, failed_login_attempts, locked_until, mfa_enabled, mfa_secret_ciphertext, created_at, last_login_at
        FROM auth_users
        WHERE LOWER(email) = $1
        LIMIT 1`,
@@ -192,6 +200,10 @@ export class DatabaseClient {
       createdAt: new Date(result.rows[0].created_at).toISOString(),
       lastLoginAt: result.rows[0].last_login_at ? new Date(result.rows[0].last_login_at).toISOString() : undefined,
       passwordHash: result.rows[0].password_hash,
+      failedLoginAttempts: result.rows[0].failed_login_attempts,
+      lockedUntil: result.rows[0].locked_until ? new Date(result.rows[0].locked_until).toISOString() : undefined,
+      mfaEnabled: result.rows[0].mfa_enabled,
+      mfaSecretCiphertext: result.rows[0].mfa_secret_ciphertext || undefined,
     } : null;
   }
 
@@ -224,6 +236,34 @@ export class DatabaseClient {
   async updateAuthUserLastLogin(userId: string): Promise<void> {
     if (!this.pool) return;
     await this.pool.query('UPDATE auth_users SET last_login_at = NOW() WHERE id = $1', [userId]);
+  }
+
+  async recordFailedLogin(userId: string, maxAttempts: number, lockMinutes: number): Promise<{ failedAttempts: number; lockedUntil?: string }> {
+    if (!this.pool) return { failedAttempts: 0 };
+    const result = await this.pool.query(
+      `UPDATE auth_users
+       SET failed_login_attempts = failed_login_attempts + 1,
+           locked_until = CASE WHEN failed_login_attempts + 1 >= $2 THEN NOW() + ($3 * INTERVAL '1 minute') ELSE locked_until END
+       WHERE id = $1
+       RETURNING failed_login_attempts, locked_until`,
+      [userId, maxAttempts, lockMinutes]
+    );
+    const row = result.rows[0];
+    return { failedAttempts: row?.failed_login_attempts || 0, lockedUntil: row?.locked_until ? new Date(row.locked_until).toISOString() : undefined };
+  }
+
+  async resetLoginProtection(userId: string): Promise<void> {
+    if (!this.pool) return;
+    await this.pool.query('UPDATE auth_users SET failed_login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1', [userId]);
+  }
+
+  async updateAuthSecurity(userId: string, updates: { mfaEnabled?: boolean; mfaSecretCiphertext?: string }): Promise<boolean> {
+    if (!this.pool) return false;
+    const result = await this.pool.query(
+      `UPDATE auth_users SET mfa_enabled = COALESCE($1, mfa_enabled), mfa_secret_ciphertext = COALESCE($2, mfa_secret_ciphertext) WHERE id = $3`,
+      [updates.mfaEnabled ?? null, updates.mfaSecretCiphertext ?? null, userId]
+    );
+    return result.rowCount === 1;
   }
 
   async listAuthUsers(tenantId: string): Promise<TenantScopedRecord[]> {

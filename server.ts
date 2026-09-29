@@ -77,19 +77,39 @@ app.get('/api/v1/health', (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/api/v1/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, otp } = req.body || {};
     if (typeof email !== 'string' || typeof password !== 'string') {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
-    const { user, session } = await AuthUserService.authenticate(email, password);
+    const { user, session } = await AuthUserService.authenticate(email, password, typeof otp === 'string' ? otp : undefined, req.ip);
     res.status(200).json({
       token: session.sessionId,
       expiresAt: session.expiresAt,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId },
     });
-  } catch {
-    res.status(401).json({ error: 'Invalid email or password.' });
+  } catch (error: any) {
+    const message = error.message || '';
+    const status = message.includes('Too many') || message.includes('temporarily locked') ? 429 : message.includes('MFA_ENROLLMENT_REQUIRED') ? 403 : 401;
+    res.status(status).json({ error: message.includes('MFA_ENROLLMENT_REQUIRED') ? 'MFA enrollment is required before login.' : message.includes('Invalid MFA') ? 'Invalid MFA code.' : message || 'Invalid email or password.' });
   }
+});
+
+app.post('/api/v1/auth/mfa/setup', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (typeof email !== 'string' || typeof password !== 'string') return res.status(400).json({ error: 'Email and password are required.' });
+    const setup = await AuthUserService.beginMfaSetup(email, password);
+    res.json(setup);
+  } catch { res.status(401).json({ error: 'Unable to start MFA setup.' }); }
+});
+
+app.post('/api/v1/auth/mfa/confirm', async (req, res) => {
+  try {
+    const { email, password, code } = req.body || {};
+    if (typeof email !== 'string' || typeof password !== 'string' || typeof code !== 'string') return res.status(400).json({ error: 'Email, password, and six-digit code are required.' });
+    await AuthUserService.confirmMfa(email, password, code);
+    res.status(204).send();
+  } catch { res.status(401).json({ error: 'Unable to confirm MFA.' }); }
 });
 
 app.post('/api/v1/auth/logout', requireSessionAuth, async (req: AuthenticatedRequest, res) => {

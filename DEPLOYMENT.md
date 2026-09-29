@@ -19,6 +19,15 @@ The first startup applies the versioned `0001_runtime_records` and `0002_authent
 
 Authentication uses `auth_users` and `auth_sessions`: passwords are stored as Node.js `scrypt` hashes, bearer tokens are random opaque values whose SHA-256 hashes are stored, and logout marks sessions revoked in PostgreSQL. The client never supplies the authenticated tenant or role.
 
+Login protection is enabled by default:
+
+- Per-process rate limiting tracks email and source IP: 10 attempts per 15-minute window.
+- PostgreSQL persists account failures; after 5 failed password or MFA attempts, the account is locked for 15 minutes.
+- `Owner` and `Admin` accounts must enroll in TOTP MFA before they can receive a session.
+- MFA secrets are encrypted with AES-256-GCM using `RECOVEROS_MASTER_KEK_HEX` and are never returned after setup except as the one-time setup response.
+- MFA setup endpoints are `POST /api/v1/auth/mfa/setup` and `POST /api/v1/auth/mfa/confirm`.
+- For multiple application replicas, put a shared rate limiter/WAF (for example, a managed gateway or Redis-backed limiter) in front of the service; the persistent account lock remains database-backed.
+
 User provisioning is server-side and tenant-scoped:
 
 - `GET /api/v1/admin/users` — Owner/Admin only; returns no password fields.

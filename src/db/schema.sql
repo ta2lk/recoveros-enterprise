@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS users (
     role VARCHAR(32) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
     password_hash VARCHAR(255) NOT NULL,
+    failed_login_attempts INT NOT NULL DEFAULT 0,
+    locked_until TIMESTAMPTZ,
     mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     mfa_secret VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -46,6 +48,10 @@ CREATE TABLE IF NOT EXISTS auth_users (
     role VARCHAR(32) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
     password_hash VARCHAR(255) NOT NULL,
+    failed_login_attempts INT NOT NULL DEFAULT 0,
+    locked_until TIMESTAMPTZ,
+    mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    mfa_secret_ciphertext TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_login_at TIMESTAMPTZ
 );

@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   revoked_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions (token_hash);
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS failed_login_attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS mfa_secret_ciphertext TEXT;
 
 ALTER TABLE recoveros_runtime_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recoveros_runtime_records FORCE ROW LEVEL SECURITY;
