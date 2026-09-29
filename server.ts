@@ -7,6 +7,7 @@ import { MatchingEngine } from './src/engine/matching';
 import { PromptDefense } from './src/security/promptDefense';
 import { ArchitecturalTestRunner } from './src/engine/architecturalTest';
 import { requireSessionAuth, SessionService, AuthenticatedRequest } from './src/security/sessionAuth';
+import { AuthUserService } from './src/security/authService';
 import { AuditLogService } from './src/db/auditLog';
 import { IngestionQueueService } from './src/ingestion/queue';
 import { EncryptedDocumentStorage } from './src/storage/encryptedStorage';
@@ -74,6 +75,30 @@ app.get('/api/v1/health', (req, res) => {
 // ---------------------------------------------------------------------------
 // Authentication & Session Endpoints
 // ---------------------------------------------------------------------------
+app.post('/api/v1/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
+    const { user, session } = await AuthUserService.authenticate(email, password);
+    res.status(200).json({
+      token: session.sessionId,
+      expiresAt: session.expiresAt,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId },
+    });
+  } catch {
+    res.status(401).json({ error: 'Invalid email or password.' });
+  }
+});
+
+app.post('/api/v1/auth/logout', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  if (db.usesPostgres) await SessionService.revokeSessionDurable(session);
+  else SessionService.revokeSession(session.sessionId);
+  res.status(204).send();
+});
+
 app.post('/api/v1/auth/session', (req, res) => {
   if (isProduction || !isTestMode) {
     return res.status(404).json({ error: 'NOT_FOUND' });
@@ -251,8 +276,11 @@ app.get('*', (req, res) => {
 });
 
 // If not in Vite dev mode, start server
-if (isProduction) {
+if (db.usesPostgres) {
   await db.initialize();
+}
+
+if (isProduction) {
   app.listen(port, () => {
     console.log(`RecoverOS Enterprise Server listening on port ${port}`);
   });

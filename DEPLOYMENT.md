@@ -15,7 +15,17 @@ curl http://localhost:3000/ready
 
 `/ready` must return HTTP 200 with `database: "CONNECTED"` and `persistenceMode: "postgres"` before the service is considered ready.
 
-The first startup applies the versioned `0001_runtime_records` migration and enables PostgreSQL Row-Level Security on the runtime persistence table. The persistent volume is named `recoveros-postgres-data`.
+The first startup applies the versioned `0001_runtime_records` and `0002_authentication` migrations and enables PostgreSQL Row-Level Security on tenant runtime data. The persistent volume is named `recoveros-postgres-data`.
+
+Authentication uses `auth_users` and `auth_sessions`: passwords are stored as Node.js `scrypt` hashes, bearer tokens are random opaque values whose SHA-256 hashes are stored, and logout marks sessions revoked in PostgreSQL. The client never supplies the authenticated tenant or role.
+
+To provision the first user, call `AuthUserService.createUser` from a protected administrative provisioning workflow. Do not add a public signup endpoint. The login endpoint is:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"your-password"}'
+```
 
 ## 2. Secrets and production requirements
 

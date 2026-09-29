@@ -39,6 +39,30 @@ CREATE TABLE IF NOT EXISTS recoveros_runtime_records (
   PRIMARY KEY (table_name, id)
 );
 
+CREATE TABLE IF NOT EXISTS auth_users (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(32) NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_login_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id VARCHAR(128) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  role VARCHAR(32) NOT NULL,
+  token_hash VARCHAR(64) NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions (token_hash);
+
 ALTER TABLE recoveros_runtime_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recoveros_runtime_records FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS recoveros_runtime_tenant_isolation ON recoveros_runtime_records;
@@ -68,7 +92,7 @@ BEFORE UPDATE OR DELETE ON recoveros_runtime_records
 FOR EACH ROW EXECUTE FUNCTION deny_recoveros_audit_modification();
 
 INSERT INTO recoveros_schema_migrations (version)
-VALUES ('0001_runtime_records')
+VALUES ('0001_runtime_records'), ('0002_authentication')
 ON CONFLICT (version) DO NOTHING;
 `;
 
@@ -97,7 +121,7 @@ export class DatabaseClient {
     this.initTables([
       'tenants', 'users', 'suppliers', 'contracts', 'purchase_orders', 'po_lines',
       'goods_receipts', 'invoices', 'invoice_lines', 'payments', 'opportunities',
-      'claims', 'ingestion_jobs', 'dead_letter_queue', 'audit_log_entries',
+      'claims', 'ingestion_jobs', 'dead_letter_queue', 'audit_log_entries', 'sessions',
     ]);
 
     if (process.env.DATABASE_URL) {
@@ -146,6 +170,99 @@ export class DatabaseClient {
 
   async close(): Promise<void> {
     if (this.pool) await this.pool.end();
+  }
+
+  async findUserByEmail(email: string): Promise<TenantScopedRecord | null> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!this.pool) {
+      for (const user of this.tables.get('users')?.values() || []) {
+        if (String(user.email).toLowerCase() === normalizedEmail) return user;
+      }
+      return null;
+    }
+    const result = await this.pool.query(
+      `SELECT id, tenant_id, email, name, role, status, password_hash, created_at, last_login_at
+       FROM auth_users
+       WHERE LOWER(email) = $1
+       LIMIT 1`,
+      [normalizedEmail]
+    );
+    return result.rows[0] ? {
+      ...result.rows[0], tenantId: result.rows[0].tenant_id,
+      createdAt: new Date(result.rows[0].created_at).toISOString(),
+      lastLoginAt: result.rows[0].last_login_at ? new Date(result.rows[0].last_login_at).toISOString() : undefined,
+      passwordHash: result.rows[0].password_hash,
+    } : null;
+  }
+
+  async insertAuthUser(record: TenantScopedRecord): Promise<TenantScopedRecord> {
+    if (!this.pool) {
+      this.tables.get('users')?.set(record.id, record);
+      return record;
+    }
+    await this.pool.query(
+      `INSERT INTO auth_users (id, tenant_id, email, name, role, status, password_hash, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [record.id, record.tenantId, record.email, record.name, record.role, record.status, record.passwordHash, record.createdAt]
+    );
+    return record;
+  }
+
+  async insertAuthSession(record: TenantScopedRecord): Promise<TenantScopedRecord> {
+    if (!this.pool) {
+      this.tables.get('sessions')?.set(record.id, record);
+      return record;
+    }
+    await this.pool.query(
+      `INSERT INTO auth_sessions (id, tenant_id, user_id, role, token_hash, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), $7)`,
+      [record.id, record.tenantId, record.userId, record.role, record.tokenHash, record.expiresAt, record.createdAt]
+    );
+    return record;
+  }
+
+  async updateAuthUserLastLogin(userId: string): Promise<void> {
+    if (!this.pool) return;
+    await this.pool.query('UPDATE auth_users SET last_login_at = NOW() WHERE id = $1', [userId]);
+  }
+
+  async findSessionByTokenHash(tokenHash: string): Promise<TenantScopedRecord | null> {
+    if (!this.pool) {
+      for (const session of this.tables.get('sessions')?.values() || []) {
+        if (session.tokenHash === tokenHash) return session;
+      }
+      return null;
+    }
+    const result = await this.pool.query(
+      `SELECT id, tenant_id, user_id, role, token_hash, EXTRACT(EPOCH FROM expires_at) * 1000 AS expires_at, created_at, revoked_at
+       FROM auth_sessions
+       WHERE token_hash = $1
+       LIMIT 1`,
+      [tokenHash]
+    );
+    return result.rows[0] ? {
+      id: result.rows[0].id,
+      tenantId: result.rows[0].tenant_id,
+      userId: result.rows[0].user_id,
+      role: result.rows[0].role,
+      tokenHash: result.rows[0].token_hash,
+      expiresAt: Number(result.rows[0].expires_at),
+      createdAt: new Date(result.rows[0].created_at).toISOString(),
+      revokedAt: result.rows[0].revoked_at ? new Date(result.rows[0].revoked_at).toISOString() : undefined,
+    } : null;
+  }
+
+  async revokeAuthSession(id: string): Promise<boolean> {
+    if (!this.pool) {
+      const session = this.tables.get('sessions')?.get(id);
+      if (!session) return false;
+      session.revokedAt = new Date().toISOString();
+      return true;
+    }
+    const result = await this.pool.query(
+      `UPDATE auth_sessions SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL`, [id]
+    );
+    return result.rowCount === 1;
   }
 
   private extractTenantFromSession(session: AuthenticatedSession): string {

@@ -12,6 +12,30 @@ CREATE TABLE IF NOT EXISTS recoveros_runtime_records (
   PRIMARY KEY (table_name, id)
 );
 
+CREATE TABLE IF NOT EXISTS auth_users (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(32) NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_login_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id VARCHAR(128) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  role VARCHAR(32) NOT NULL,
+  token_hash VARCHAR(64) NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions (token_hash);
+
 ALTER TABLE recoveros_runtime_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recoveros_runtime_records FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS recoveros_runtime_tenant_isolation ON recoveros_runtime_records;

@@ -35,6 +35,33 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE (tenant_id, email)
 );
 
+-- Authentication lookup tables. These are intentionally separate from tenant
+-- RLS data because login happens before a tenant context exists. The service
+-- exposes only exact-email and exact-token-hash lookups, never a list API.
+CREATE TABLE IF NOT EXISTS auth_users (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    role VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id VARCHAR(128) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    role VARCHAR(32) NOT NULL,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions (token_hash);
+
 -- 3. Suppliers Table
 CREATE TABLE IF NOT EXISTS suppliers (
     id VARCHAR(64) PRIMARY KEY,
