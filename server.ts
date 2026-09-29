@@ -19,8 +19,22 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+const isTestMode = process.env.RECOVEROS_TEST_MODE === 'true';
 
-app.use(express.json({ limit: '50mb' }));
+if (isProduction && !/^[0-9a-fA-F]{64}$/.test(process.env.RECOVEROS_MASTER_KEK_HEX || '')) {
+  throw new Error('RECOVEROS_MASTER_KEK_HEX must be configured as a 32-byte hex secret before production startup.');
+}
+
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'self'");
+  next();
+});
+app.use(express.json({ limit: '10mb' }));
 
 // Liveness & Readiness Checks (Section 42)
 app.get('/healthz', (req, res) => {
@@ -28,7 +42,17 @@ app.get('/healthz', (req, res) => {
 });
 
 app.get('/ready', (req, res) => {
-  res.status(200).json({ status: 'READY', services: ['database', 'matching-engine', 'agents', 'ingestion-queue'] });
+  // The current repository uses in-memory services; never report production
+  // readiness until a durable database is configured and connected.
+  const durablePersistenceConfigured = Boolean(process.env.DATABASE_URL);
+  // DATABASE_URL alone is not a connection check. This phase still has no
+  // PostgreSQL adapter, so production must remain NOT_READY rather than lie.
+  const ready = !isProduction;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'READY' : 'NOT_READY',
+    services: ['database', 'matching-engine', 'agents', 'ingestion-queue'],
+    durablePersistenceConfigured,
+  });
 });
 
 // API v1 Health & Metadata
@@ -47,6 +71,9 @@ app.get('/api/v1/health', (req, res) => {
 // Authentication & Session Endpoints
 // ---------------------------------------------------------------------------
 app.post('/api/v1/auth/session', (req, res) => {
+  if (isProduction || !isTestMode) {
+    return res.status(404).json({ error: 'NOT_FOUND' });
+  }
   const { userId, tenantId, role } = req.body;
   if (!userId || !tenantId || !role) {
     return res.status(400).json({ error: 'Missing userId, tenantId, or role in request body' });
@@ -174,6 +201,7 @@ app.get('/api/v1/storage/download/:documentId', requireSessionAuth, async (req: 
 // Dev/Test Diagnostic Endpoints
 // ---------------------------------------------------------------------------
 app.post('/api/v1/benchmark/run', (req, res) => {
+  if (isProduction) return res.status(404).json({ error: 'NOT_FOUND' });
   try {
     const results = BenchmarkEvaluator.runBenchmark();
     res.json(results);
@@ -183,6 +211,7 @@ app.post('/api/v1/benchmark/run', (req, res) => {
 });
 
 app.post('/api/v1/architecture/run', async (req, res) => {
+  if (isProduction) return res.status(404).json({ error: 'NOT_FOUND' });
   try {
     const report = await ArchitecturalTestRunner.runFullArchitecturalAudit();
     res.json(report);
@@ -192,6 +221,7 @@ app.post('/api/v1/architecture/run', async (req, res) => {
 });
 
 app.post('/api/v1/security/sanitize', (req, res) => {
+  if (isProduction) return res.status(404).json({ error: 'NOT_FOUND' });
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'Missing text parameter' });
   const sanitized = PromptDefense.sanitizeExternalData(text);

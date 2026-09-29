@@ -10,6 +10,8 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - RECOVEROS_MASTER_KEK_HEX=${RECOVEROS_MASTER_KEK_HEX}
+      - DATABASE_URL=${DATABASE_URL}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/healthz"]

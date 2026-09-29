@@ -22,7 +22,9 @@ export interface EncryptedStorageEnvelope {
   encryptedDataHex: string;
   ivHex: string;
   authTagHex: string;
-  encryptedDekHex: string; // DEK encrypted under Master KEK
+  encryptedDekHex: string; // DEK encrypted under the configured KEK
+  dekWrapIvHex: string;
+  dekWrapAuthTagHex: string;
   sha256Hash: string;
   uploadedAt: string;
   virusScanPassed: boolean;
@@ -37,8 +39,30 @@ export class VirusDetectedError extends Error {
 
 export class EncryptedDocumentStorage {
   private static documentStore: Map<string, EncryptedStorageEnvelope> = new Map();
-  // Simulated Cloud KMS Master Key Encryption Key (KEK) - 256 bit
-  private static MASTER_KEK = Buffer.from('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'hex');
+
+  /**
+   * Resolve the KEK from a secret manager-provided environment variable.
+   * A per-process ephemeral key is allowed only outside production so local
+   * tests cannot accidentally train developers to ship a static key.
+   */
+  private static getMasterKek(): Buffer {
+    const configured = process.env.RECOVEROS_MASTER_KEK_HEX;
+    if (configured) {
+      if (!/^[0-9a-fA-F]{64}$/.test(configured)) {
+        throw new SecurityViolationError('RECOVEROS_MASTER_KEK_HEX must be exactly 32 bytes encoded as hex.');
+      }
+      return Buffer.from(configured, 'hex');
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new SecurityViolationError('Document encryption key is not configured; refusing production startup operation.');
+    }
+
+    if (!this.ephemeralMasterKek) this.ephemeralMasterKek = randomBytes(32);
+    return this.ephemeralMasterKek;
+  }
+
+  private static ephemeralMasterKek: Buffer | undefined;
 
   /**
    * Antivirus & File Integrity Hook
@@ -97,9 +121,12 @@ export class EncryptedDocumentStorage {
     const encryptedData = Buffer.concat([cipher.update(rawBytes), cipher.final()]);
     const authTag = cipher.getAuthTag();
 
-    // 4. Envelope Encryption: Encrypt DEK under Master KEK (AES-256-ECB / KeyWrap)
-    const kekCipher = createCipheriv('aes-256-ecb', this.MASTER_KEK, null);
+    // 4. Envelope Encryption: Encrypt DEK under configured KEK using AES-GCM.
+    // ECB is intentionally avoided because it provides no authenticated wrapping.
+    const dekWrapIv = randomBytes(12);
+    const kekCipher = createCipheriv('aes-256-gcm', this.getMasterKek(), dekWrapIv);
     const encryptedDek = Buffer.concat([kekCipher.update(dek), kekCipher.final()]);
+    const dekWrapAuthTag = kekCipher.getAuthTag();
 
     const envelope: EncryptedStorageEnvelope = {
       documentId,
@@ -111,6 +138,8 @@ export class EncryptedDocumentStorage {
       ivHex: iv.toString('hex'),
       authTagHex: authTag.toString('hex'),
       encryptedDekHex: encryptedDek.toString('hex'),
+      dekWrapIvHex: dekWrapIv.toString('hex'),
+      dekWrapAuthTagHex: dekWrapAuthTag.toString('hex'),
       sha256Hash,
       uploadedAt: new Date().toISOString(),
       virusScanPassed: true,
@@ -140,8 +169,9 @@ export class EncryptedDocumentStorage {
       );
     }
 
-    // 1. Decrypt DEK using Master KEK
-    const kekDecipher = createDecipheriv('aes-256-ecb', this.MASTER_KEK, null);
+    // 1. Decrypt and authenticate DEK using the configured KEK
+    const kekDecipher = createDecipheriv('aes-256-gcm', this.getMasterKek(), Buffer.from(envelope.dekWrapIvHex, 'hex'));
+    kekDecipher.setAuthTag(Buffer.from(envelope.dekWrapAuthTagHex, 'hex'));
     const dek = Buffer.concat([
       kekDecipher.update(Buffer.from(envelope.encryptedDekHex, 'hex')),
       kekDecipher.final(),
