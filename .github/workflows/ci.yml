@@ -1,0 +1,86 @@
+name: RecoverOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Typecheck, unit tests, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Typecheck
+        run: npm run lint
+      - name: Unit and phase tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+
+  postgres-integration:
+    name: PostgreSQL integration and security tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: recoveros
+          POSTGRES_PASSWORD: recoveros
+          POSTGRES_DB: recoveros
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U recoveros -d recoveros"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Run PostgreSQL suite
+        env:
+          DATABASE_URL: postgresql://recoveros:recoveros@127.0.0.1:5432/recoveros
+          RECOVEROS_MASTER_KEK_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          OBJECT_STORAGE_DRIVER: filesystem
+          OBJECT_STORAGE_LOCAL_DIR: ${{ runner.temp }}/recoveros-objects
+        run: npm run test:postgres:all
+
+  docker:
+    name: Build production container
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [unit]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --tag recoveros:${{ github.sha }} .

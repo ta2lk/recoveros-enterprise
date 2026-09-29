@@ -1,4 +1,5 @@
-name: RecoverOS Enterprise CI/CD
+# Legacy copy retained for historical reference. GitHub executes .github/workflows/ci.yml.
+name: RecoverOS Enterprise CI/CD (legacy reference)
 
 on:
   push:

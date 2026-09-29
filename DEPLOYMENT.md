@@ -49,6 +49,22 @@ The restore command validates the database dump and every object checksum before
 - `GET /metrics` exposes Prometheus-compatible request counters, error counters, duration summaries, and database health checks.
 - Every response includes `X-Request-ID`; structured JSON request logs include method, route, status, duration, and request ID without credentials or document content.
 
+## CI/CD security gates
+
+GitHub executes the workflows in `.github/workflows/` on pushes and pull requests:
+
+- `ci.yml`: locked npm install, TypeScript check, unit/phase tests, PostgreSQL integration tests, production build, and production container build.
+- `security.yml`: `npm audit`, lockfile reproducibility, Dependency Review, Gitleaks secret scanning, CodeQL JavaScript/TypeScript analysis, and Trivy CRITICAL/HIGH container scanning with SARIF upload.
+- Dependabot checks npm, Docker, and GitHub Actions dependencies weekly.
+
+The same local gate is available before opening a pull request:
+
+```bash
+npm run security:gate
+```
+
+Merge protection should require the `unit`, `postgres-integration`, `docker`, `dependency-audit`, `secret-scan`, `codeql`, and `container-scan` checks on the `main` branch.
+
 Login protection is enabled by default:
 
 - Per-process rate limiting tracks email and source IP: 10 attempts per 15-minute window.
