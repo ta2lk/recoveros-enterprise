@@ -11,7 +11,8 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "tsx test/run_tests.ts && tsx test/phase1_financial_correctness.test.ts && tsx test/phase2_backend_data.test.ts",
-    "test:postgres": "tsx test/postgres_persistence.test.ts"
+    "test:postgres": "tsx test/postgres_persistence.test.ts",
+    "test:postgres:audit-queue": "tsx test/postgres_audit_queue.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

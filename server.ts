@@ -22,6 +22,13 @@ const port = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 const isTestMode = process.env.RECOVEROS_TEST_MODE === 'true';
 
+const appendAudit = (session: AuthenticatedRequest['sessionContext'], entryData: any) => {
+  if (!session) throw new Error('Missing authenticated session.');
+  return db.usesPostgres
+    ? AuditLogService.appendEntryDurable(session, entryData)
+    : Promise.resolve(AuditLogService.appendEntry(session, entryData));
+};
+
 if (isProduction && !/^[0-9a-fA-F]{64}$/.test(process.env.RECOVEROS_MASTER_KEK_HEX || '')) {
   throw new Error('RECOVEROS_MASTER_KEK_HEX must be configured as a 32-byte hex secret before production startup.');
 }
@@ -88,15 +95,19 @@ app.post('/api/v1/auth/session', (req, res) => {
 // ---------------------------------------------------------------------------
 // Cryptographic Audit Log Verification Endpoint (Phase 2 Requirement)
 // ---------------------------------------------------------------------------
-app.get('/api/v1/audit/verify', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+app.get('/api/v1/audit/verify', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
   const session = req.sessionContext!;
-  const report = AuditLogService.verifyChainIntegrity(session.tenantId);
+  const report = db.usesPostgres
+    ? await AuditLogService.verifyChainIntegrityDurable(session)
+    : AuditLogService.verifyChainIntegrity(session.tenantId);
   res.json(report);
 });
 
-app.get('/api/v1/audit/entries', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+app.get('/api/v1/audit/entries', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
   const session = req.sessionContext!;
-  const entries = AuditLogService.getEntries(session, 100);
+  const entries = db.usesPostgres
+    ? await AuditLogService.getEntriesDurable(session, 100)
+    : AuditLogService.getEntries(session, 100);
   res.json({ entriesCount: entries.length, entries });
 });
 
@@ -106,8 +117,10 @@ app.get('/api/v1/audit/entries', requireSessionAuth, (req: AuthenticatedRequest,
 app.post('/api/v1/ingestion/jobs', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
   const session = req.sessionContext!;
   try {
-    const result = await IngestionQueueService.submitBatch(session, req.body);
-    AuditLogService.appendEntry(session, {
+    const result = db.usesPostgres
+      ? await IngestionQueueService.submitBatchDurable(session, req.body)
+      : await IngestionQueueService.submitBatch(session, req.body);
+    await appendAudit(session, {
       action: 'INGESTION_BATCH_SUBMITTED',
       targetEntity: 'INGESTION_JOB',
       targetId: result.job.id,
@@ -128,10 +141,12 @@ app.post('/api/v1/ingestion/jobs', requireSessionAuth, async (req: Authenticated
   }
 });
 
-app.get('/api/v1/ingestion/jobs/:jobId', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+app.get('/api/v1/ingestion/jobs/:jobId', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
   const session = req.sessionContext!;
   try {
-    const job = IngestionQueueService.getJob(session, req.params.jobId);
+    const job = db.usesPostgres
+      ? await IngestionQueueService.getJobDurable(session, req.params.jobId)
+      : IngestionQueueService.getJob(session, req.params.jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
     res.json(job);
   } catch (err: any) {
@@ -139,9 +154,11 @@ app.get('/api/v1/ingestion/jobs/:jobId', requireSessionAuth, (req: Authenticated
   }
 });
 
-app.get('/api/v1/ingestion/dead-letter', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+app.get('/api/v1/ingestion/dead-letter', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
   const session = req.sessionContext!;
-  const entries = IngestionQueueService.getDeadLetters(session);
+  const entries = db.usesPostgres
+    ? await IngestionQueueService.getDeadLettersDurable(session)
+    : IngestionQueueService.getDeadLetters(session);
   res.json({ deadLettersCount: entries.length, entries });
 });
 
@@ -159,7 +176,7 @@ app.post('/api/v1/storage/upload', requireSessionAuth, async (req: Authenticated
     const rawBuffer = Buffer.from(base64Content, 'base64');
     const envelope = await EncryptedDocumentStorage.uploadDocument(session, fileName, mimeType || 'application/octet-stream', rawBuffer);
 
-    AuditLogService.appendEntry(session, {
+    await appendAudit(session, {
       action: 'DOCUMENT_ENCRYPTED_AND_STORED',
       targetEntity: 'DOCUMENT',
       targetId: envelope.documentId,

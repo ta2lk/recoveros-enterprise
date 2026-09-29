@@ -23,7 +23,7 @@ The first startup applies the versioned `0001_runtime_records` migration and ena
 - `POSTGRES_PASSWORD` must not be committed to Git.
 - Use a managed PostgreSQL instance with encrypted storage, automated backups, point-in-time recovery, and TLS in production.
 - Set `DATABASE_SSL=true` when the managed provider requires TLS.
-- The current phase persists generic runtime records. Domain-specific repositories, audit entries, ingestion jobs, sessions, and encrypted object storage are migrated in subsequent phases.
+- The current phase persists generic runtime records, audit entries, ingestion jobs, and the dead-letter queue. Sessions and encrypted object storage remain in the next migration phase.
 
 ## 3. Containerized deployment
 

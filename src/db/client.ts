@@ -49,6 +49,24 @@ CREATE POLICY recoveros_runtime_tenant_isolation
 CREATE INDEX IF NOT EXISTS idx_recoveros_runtime_tenant_table
   ON recoveros_runtime_records (tenant_id, table_name);
 
+CREATE OR REPLACE FUNCTION deny_recoveros_audit_modification()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.table_name = 'audit_log_entries' THEN
+    RAISE EXCEPTION 'SECURITY_VIOLATION: audit log records are append-only.';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_recoveros_audit_no_update ON recoveros_runtime_records;
+CREATE TRIGGER trg_recoveros_audit_no_update
+BEFORE UPDATE OR DELETE ON recoveros_runtime_records
+FOR EACH ROW EXECUTE FUNCTION deny_recoveros_audit_modification();
+
 INSERT INTO recoveros_schema_migrations (version)
 VALUES ('0001_runtime_records')
 ON CONFLICT (version) DO NOTHING;
