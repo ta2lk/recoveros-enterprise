@@ -99,6 +99,56 @@ app.post('/api/v1/auth/logout', requireSessionAuth, async (req: AuthenticatedReq
   res.status(204).send();
 });
 
+app.get('/api/v1/admin/users', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const users = await AuthUserService.listUsers(req.sessionContext!);
+    res.json({ users });
+  } catch (error: any) {
+    res.status(403).json({ error: error.message });
+  }
+});
+
+app.post('/api/v1/admin/users', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { email, name, role, password } = req.body || {};
+    if ([email, name, role, password].some((value) => typeof value !== 'string' || value.trim() === '')) {
+      return res.status(400).json({ error: 'email, name, role, and password are required.' });
+    }
+    const user = await AuthUserService.provisionUser(req.sessionContext!, { email, name, role, password });
+    await appendAudit(req.sessionContext!, {
+      action: 'USER_PROVISIONED', targetEntity: 'AUTH_USER', targetId: user.id,
+      payload: { email: user.email, role: user.role },
+    });
+    res.status(201).json({ user: { id: user.id, tenantId: user.tenantId, email: user.email, name: user.name, role: user.role, status: user.status } });
+  } catch (error: any) {
+    const status = error.message?.includes('Only') || error.message?.includes('cannot') ? 403 : 400;
+    res.status(status).json({ error: error.message });
+  }
+});
+
+app.patch('/api/v1/admin/users/:userId', requireSessionAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const body = req.body || {};
+    const updates: { name?: string; role?: string; status?: 'ACTIVE' | 'DISABLED' } = {};
+    if (body.name !== undefined) updates.name = body.name;
+    if (body.role !== undefined) updates.role = body.role;
+    if (body.status !== undefined) updates.status = body.status;
+    const unsupported = Object.keys(body).filter((key) => !['name', 'role', 'status'].includes(key));
+    if (!Object.keys(updates).length || unsupported.length || Object.keys(updates).some((key) => !['name', 'role', 'status'].includes(key))) {
+      return res.status(400).json({ error: 'Provide at least one supported update: name, role, or status.' });
+    }
+    await AuthUserService.updateUser(req.sessionContext!, req.params.userId, updates);
+    await appendAudit(req.sessionContext!, {
+      action: 'USER_UPDATED', targetEntity: 'AUTH_USER', targetId: req.params.userId,
+      payload: updates,
+    });
+    res.status(204).send();
+  } catch (error: any) {
+    const status = error.message?.includes('Only') || error.message?.includes('cannot') || error.message?.includes('administrator') ? 403 : 400;
+    res.status(status).json({ error: error.message });
+  }
+});
+
 app.post('/api/v1/auth/session', (req, res) => {
   if (isProduction || !isTestMode) {
     return res.status(404).json({ error: 'NOT_FOUND' });

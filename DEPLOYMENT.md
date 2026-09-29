@@ -19,6 +19,13 @@ The first startup applies the versioned `0001_runtime_records` and `0002_authent
 
 Authentication uses `auth_users` and `auth_sessions`: passwords are stored as Node.js `scrypt` hashes, bearer tokens are random opaque values whose SHA-256 hashes are stored, and logout marks sessions revoked in PostgreSQL. The client never supplies the authenticated tenant or role.
 
+User provisioning is server-side and tenant-scoped:
+
+- `GET /api/v1/admin/users` — Owner/Admin only; returns no password fields.
+- `POST /api/v1/admin/users` — Owner/Admin only; the server generates the user ID and forces the actor's tenant.
+- `PATCH /api/v1/admin/users/:userId` — Owner/Admin only; cross-tenant IDs are rejected, Admin cannot create/manage Owner or Admin accounts, and changing status or role revokes active sessions.
+- An actor cannot change their own role or status, and the last active Owner cannot be disabled.
+
 To provision the first user, call `AuthUserService.createUser` from a protected administrative provisioning workflow. Do not add a public signup endpoint. The login endpoint is:
 
 ```bash

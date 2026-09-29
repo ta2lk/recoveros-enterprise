@@ -226,6 +226,51 @@ export class DatabaseClient {
     await this.pool.query('UPDATE auth_users SET last_login_at = NOW() WHERE id = $1', [userId]);
   }
 
+  async listAuthUsers(tenantId: string): Promise<TenantScopedRecord[]> {
+    if (!this.pool) {
+      return [...(this.tables.get('users')?.values() || [])]
+        .filter((user) => user.tenantId === tenantId)
+        .map(({ passwordHash: _passwordHash, ...safe }) => safe);
+    }
+    const result = await this.pool.query(
+      `SELECT id, tenant_id, email, name, role, status, created_at, last_login_at
+       FROM auth_users WHERE tenant_id = $1 ORDER BY created_at ASC`,
+      [tenantId]
+    );
+    return result.rows.map((row) => ({
+      id: row.id, tenantId: row.tenant_id, email: row.email, name: row.name,
+      role: row.role, status: row.status,
+      createdAt: new Date(row.created_at).toISOString(),
+      lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : undefined,
+    }));
+  }
+
+  async updateAuthUser(userId: string, tenantId: string, updates: { name?: string; role?: string; status?: string }): Promise<boolean> {
+    if (!this.pool) {
+      const user = this.tables.get('users')?.get(userId);
+      if (!user || user.tenantId !== tenantId) return false;
+      Object.assign(user, updates);
+      return true;
+    }
+    const result = await this.pool.query(
+      `UPDATE auth_users
+       SET name = COALESCE($1, name), role = COALESCE($2, role), status = COALESCE($3, status)
+       WHERE id = $4 AND tenant_id = $5`,
+      [updates.name ?? null, updates.role ?? null, updates.status ?? null, userId, tenantId]
+    );
+    return result.rowCount === 1;
+  }
+
+  async revokeUserSessions(userId: string, tenantId: string): Promise<number> {
+    if (!this.pool) return 0;
+    const result = await this.pool.query(
+      `UPDATE auth_sessions SET revoked_at = NOW()
+       WHERE user_id = $1 AND tenant_id = $2 AND revoked_at IS NULL`,
+      [userId, tenantId]
+    );
+    return result.rowCount ?? 0;
+  }
+
   async findSessionByTokenHash(tokenHash: string): Promise<TenantScopedRecord | null> {
     if (!this.pool) {
       for (const session of this.tables.get('sessions')?.values() || []) {
