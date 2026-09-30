@@ -8,7 +8,6 @@
  * 4. Malicious payloads are quarantined with security incidents logged.
  */
 
-import { randomBytes, createHash } from 'node:crypto';
 import { SecurityViolationError } from '../db/client';
 
 export interface ShieldResult {
@@ -17,6 +16,19 @@ export interface ShieldResult {
   canaryToken: string;
   threatDetails?: string;
   sanitizedText: string;
+}
+
+function getSecureRandomHex(bytes: number = 16): string {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto?.getRandomValues) {
+    const arr = new Uint8Array(bytes);
+    globalThis.crypto.getRandomValues(arr);
+    return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  let hex = '';
+  for (let i = 0; i < bytes; i++) {
+    hex += Math.floor(Math.random() * 256).toString(16).padStart(2, '0');
+  }
+  return hex;
 }
 
 export class PromptInjectionShield {
@@ -37,7 +49,7 @@ export class PromptInjectionShield {
    * Generate an un-guessable canary token for the execution session
    */
   static generateCanaryToken(): string {
-    return `CANARY_${randomBytes(16).toString('hex').toUpperCase()}`;
+    return `CANARY_${getSecureRandomHex(16).toUpperCase()}`;
   }
 
   /**
