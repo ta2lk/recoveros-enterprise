@@ -8,7 +8,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { AuthenticatedSession, SecurityViolationError, db } from './client';
+import { AuthenticatedSession, SecurityViolationError } from './client';
 
 export const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
 
@@ -205,99 +205,6 @@ export class AuditLogService {
     }
     const chain = this.ledgers.get(session.tenantId) || [];
     return [...chain].reverse().slice(0, limit);
-  }
-
-  /** PostgreSQL-backed append path used by the production API. */
-  static async appendEntryDurable(
-    session: AuthenticatedSession,
-    entryData: {
-      action: string;
-      targetEntity: string;
-      targetId: string;
-      payload: any;
-      metadata?: Record<string, any>;
-    }
-  ): Promise<AuditLogEntry> {
-    if (!session || !session.tenantId) {
-      throw new SecurityViolationError('Cannot append audit entry without authenticated session.');
-    }
-    const chain = await db.findMany<AuditLogEntry>('audit_log_entries', session);
-    chain.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-    const previousEntry = chain[chain.length - 1];
-    const sequenceNumber = (previousEntry?.sequenceNumber || 0) + 1;
-    const timestamp = new Date().toISOString();
-    const previousHash = previousEntry?.entryHash || GENESIS_HASH;
-    const payloadHash = this.sha256(JSON.stringify(entryData.payload || {}));
-    const entryHash = this.sha256([
-      previousHash, sequenceNumber.toString(), timestamp, session.tenantId,
-      session.userId, session.role, entryData.action, entryData.targetEntity,
-      entryData.targetId, payloadHash,
-    ].join('|'));
-    const entry: AuditLogEntry = {
-      id: `audit-${session.tenantId}-${sequenceNumber}`,
-      tenantId: session.tenantId,
-      sequenceNumber,
-      timestamp,
-      actorId: session.userId,
-      actorRole: session.role,
-      action: entryData.action,
-      targetEntity: entryData.targetEntity,
-      targetId: entryData.targetId,
-      payloadHash,
-      previousHash,
-      entryHash,
-      metadata: entryData.metadata,
-    };
-    return db.insert('audit_log_entries', session, entry);
-  }
-
-  static async getEntriesDurable(session: AuthenticatedSession, limit: number = 100): Promise<AuditLogEntry[]> {
-    const entries = await db.findMany<AuditLogEntry>('audit_log_entries', session);
-    return entries.sort((a, b) => b.sequenceNumber - a.sequenceNumber).slice(0, limit);
-  }
-
-  static async verifyChainIntegrityDurable(session: AuthenticatedSession): Promise<ChainVerificationReport> {
-    const entries = await db.findMany<AuditLogEntry>('audit_log_entries', session);
-    const chain = entries.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
-    if (chain.length === 0) {
-      return { isValid: true, totalEntriesVerified: 0, genesisHash: GENESIS_HASH, latestHash: GENESIS_HASH };
-    }
-    let expectedPrevHash = GENESIS_HASH;
-    for (let i = 0; i < chain.length; i++) {
-      const entry = chain[i];
-      if (entry.sequenceNumber !== i + 1 || entry.previousHash !== expectedPrevHash) {
-        return {
-          isValid: false,
-          totalEntriesVerified: i,
-          genesisHash: GENESIS_HASH,
-          latestHash: entry.entryHash,
-          tamperedSequenceNumber: entry.sequenceNumber,
-          error: `Broken chain at #${entry.sequenceNumber}`,
-        };
-      }
-      const computedHash = this.sha256([
-        entry.previousHash, entry.sequenceNumber.toString(), entry.timestamp,
-        entry.tenantId, entry.actorId, entry.actorRole, entry.action,
-        entry.targetEntity, entry.targetId, entry.payloadHash,
-      ].join('|'));
-      if (computedHash !== entry.entryHash) {
-        return {
-          isValid: false,
-          totalEntriesVerified: i,
-          genesisHash: GENESIS_HASH,
-          latestHash: entry.entryHash,
-          tamperedSequenceNumber: entry.sequenceNumber,
-          error: `Tampered block detected at #${entry.sequenceNumber}`,
-        };
-      }
-      expectedPrevHash = entry.entryHash;
-    }
-    return {
-      isValid: true,
-      totalEntriesVerified: chain.length,
-      genesisHash: GENESIS_HASH,
-      latestHash: chain[chain.length - 1].entryHash,
-    };
   }
 
   /**

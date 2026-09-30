@@ -1,19 +1,4 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: recoveros-postgres
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-recoveros}
-      POSTGRES_USER: ${POSTGRES_USER:-recoveros}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-    volumes:
-      - recoveros-postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   recoveros:
     build:
       context: .
@@ -22,28 +7,12 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NODE_ENV: production
-      PORT: 3000
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      RECOVEROS_MASTER_KEK_HEX: ${RECOVEROS_MASTER_KEK_HEX:?RECOVEROS_MASTER_KEK_HEX must be set}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-recoveros}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-recoveros}
-      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
-      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:?OBJECT_STORAGE_BUCKET must be set}
-      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
-      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-}
-      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-}
-      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-}
-      OBJECT_STORAGE_SSE_KMS_KEY_ID: ${OBJECT_STORAGE_SSE_KMS_KEY_ID:?OBJECT_STORAGE_SSE_KMS_KEY_ID must be set}
-      OBJECT_STORAGE_FORCE_PATH_STYLE: ${OBJECT_STORAGE_FORCE_PATH_STYLE:-false}
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - NODE_ENV=production
+      - PORT=3000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
-
-volumes:
-  recoveros-postgres-data:

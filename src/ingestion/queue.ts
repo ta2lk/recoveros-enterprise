@@ -9,8 +9,8 @@
  */
 
 import { z } from 'zod';
-import { createHash, randomUUID } from 'node:crypto';
-import { AuthenticatedSession, SecurityViolationError, db } from '../db/client';
+import { createHash } from 'node:crypto';
+import { AuthenticatedSession, SecurityViolationError } from '../db/client';
 
 // ---------------------------------------------------------------------------
 // Zod Ingestion Schemas
@@ -181,69 +181,6 @@ export class IngestionQueueService {
     }
   }
 
-  /** PostgreSQL-backed ingestion path used by the production API. */
-  static async submitBatchDurable(
-    session: AuthenticatedSession,
-    payload: IngestionBatchPayload
-  ): Promise<{ job: IngestionJob; isExisting: boolean }> {
-    if (!session || !session.tenantId) {
-      throw new SecurityViolationError('Cannot submit ingestion batch without authenticated session.');
-    }
-    const validated = IngestionBatchPayloadSchema.parse(payload);
-    const payloadHash = createHash('sha256').update(JSON.stringify(validated.records)).digest('hex');
-    const existing = await db.findMany<IngestionJob>('ingestion_jobs', session, (job) =>
-      job.idempotencyKey === validated.idempotencyKey
-    );
-    if (existing[0]) return { job: existing[0], isExisting: true };
-
-    const job: IngestionJob = {
-      id: `job-${session.tenantId}-${Date.now()}-${randomUUID().slice(0, 8)}`,
-      tenantId: session.tenantId,
-      idempotencyKey: validated.idempotencyKey,
-      payloadSha256: payloadHash,
-      entityType: validated.entityType,
-      recordCount: validated.records.length,
-      status: 'PROCESSING',
-      retryCount: 0,
-      maxRetries: 3,
-      processedRecordsCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-    await db.insert('ingestion_jobs', session, job);
-
-    try {
-      let schema: z.ZodSchema<any>;
-      switch (job.entityType) {
-        case 'INVOICE': schema = InvoiceRowSchema; break;
-        case 'PURCHASE_ORDER': schema = PoRowSchema; break;
-        default: schema = z.record(z.string(), z.any());
-      }
-      for (const row of validated.records) {
-        schema.parse(row);
-        job.processedRecordsCount++;
-      }
-      job.status = 'COMPLETED';
-      job.completedAt = new Date().toISOString();
-      await db.update('ingestion_jobs', session, job.id, job);
-    } catch (err: any) {
-      job.retryCount = 1;
-      job.status = 'DEAD_LETTER';
-      job.errorMessage = err.message || 'Validation or processing error';
-      await db.update('ingestion_jobs', session, job.id, job);
-      const deadLetter: DeadLetterEntry = {
-        id: `dlq-${job.id}`,
-        tenantId: session.tenantId,
-        jobId: job.id,
-        failureReason: job.errorMessage || 'Validation or processing error',
-        rawPayloadPreview: JSON.stringify(validated.records.slice(0, 3)),
-        attemptsMade: job.retryCount,
-        quarantinedAt: new Date().toISOString(),
-      };
-      await db.insert('dead_letter_queue', session, deadLetter);
-    }
-    return { job, isExisting: false };
-  }
-
   /**
    * Get job status
    */
@@ -254,10 +191,6 @@ export class IngestionQueueService {
       throw new SecurityViolationError('Cannot inspect jobs of another tenant.');
     }
     return job;
-  }
-
-  static async getJobDurable(session: AuthenticatedSession, jobId: string): Promise<IngestionJob | null> {
-    return db.findById<IngestionJob>('ingestion_jobs', session, jobId);
   }
 
   /**
@@ -271,10 +204,6 @@ export class IngestionQueueService {
       }
     }
     return results;
-  }
-
-  static async getDeadLettersDurable(session: AuthenticatedSession): Promise<DeadLetterEntry[]> {
-    return db.findMany<DeadLetterEntry>('dead_letter_queue', session);
   }
 
   /**

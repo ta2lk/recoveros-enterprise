@@ -1,130 +1,30 @@
 # RecoverOS - Production Deployment Guide
 
-## 1. PostgreSQL-backed local deployment
+## 1. Containerized Deployment via Docker
 
-The application requires PostgreSQL for production persistence. The in-memory store is available only for unit tests.
+RecoverOS includes a hardened multi-stage Dockerfile and Docker Compose configuration.
 
-```bash
-cp .env.example .env
-export POSTGRES_PASSWORD='change-me-locally'
-export RECOVEROS_MASTER_KEK_HEX="$(openssl rand -hex 32)"
-docker compose up --build
-curl http://localhost:3000/healthz
-curl http://localhost:3000/ready
-```
-
-`/ready` must return HTTP 200 with `database: "CONNECTED"` and `persistenceMode: "postgres"` before the service is considered ready.
-
-The first startup applies the versioned `0001_runtime_records` and `0002_authentication` migrations and enables PostgreSQL Row-Level Security on tenant runtime data. The persistent volume is named `recoveros-postgres-data`.
-
-Authentication uses `auth_users` and `auth_sessions`: passwords are stored as Node.js `scrypt` hashes, bearer tokens are random opaque values whose SHA-256 hashes are stored, and logout marks sessions revoked in PostgreSQL. The client never supplies the authenticated tenant or role.
-
-Documents use a durable S3-compatible object store. The encrypted bytes are written under `tenants/{tenant}/documents/{document}.bin`; PostgreSQL stores only the tenant-scoped envelope metadata in `document_objects`. The payload is encrypted with a unique AES-256-GCM DEK, the DEK is wrapped by `RECOVEROS_MASTER_KEK_HEX`, and production uploads additionally require S3 server-side encryption with `OBJECT_STORAGE_SSE_KMS_KEY_ID`. In production, do not use `OBJECT_STORAGE_DRIVER=filesystem`.
-
-## Backup and restore
-
-Backups are created with a dedicated database credential, not the application credential. The backup role must have `BYPASSRLS` and read access to the RecoverOS schema; keep it in a secret manager and restrict its network access. Configure `BACKUP_DATABASE_URL` separately from `DATABASE_URL`.
+### Building and Running the Production Container
 
 ```bash
-BACKUP_DATABASE_URL="postgresql://backup-user:...@postgres:5432/recoveros" \
-OBJECT_STORAGE_BUCKET="recoveros-documents" \
-BACKUP_UPLOAD=true \
-npm run ops:backup
-```
-
-`ops:backup` creates a PostgreSQL custom-format dump, copies encrypted object bytes, writes SHA-256 checksums in `manifest.json`, and can upload the complete artifact under `backups/{backupId}` with SSE-KMS. Restore is deliberately guarded:
-
-```bash
-CONFIRM_RESTORE=YES \
-RESTORE_DATABASE_URL="postgresql://backup-user:...@postgres:5432/recoveros" \
-npm run ops:restore -- /secure/backup/path/manifest.json
-```
-
-The restore command validates the database dump and every object checksum before restoring. Test restore into an isolated database and bucket prefix on a scheduled basis; do not restore over production without an approved change window.
-
-## Observability
-
-- `GET /healthz` is a liveness probe and does not depend on external services.
-- `GET /ready` checks PostgreSQL and Object Storage connectivity; production requires PostgreSQL and S3 mode.
-- `GET /metrics` exposes Prometheus-compatible request counters, error counters, duration summaries, and database health checks.
-- Every response includes `X-Request-ID`; structured JSON request logs include method, route, status, duration, and request ID without credentials or document content.
-
-## CI/CD security gates
-
-GitHub executes the workflows in `.github/workflows/` on pushes and pull requests:
-
-- `ci.yml`: locked npm install, TypeScript check, unit/phase tests, PostgreSQL integration tests, production build, and production container build.
-- `security.yml`: `npm audit`, lockfile reproducibility, Dependency Review, Gitleaks secret scanning, CodeQL JavaScript/TypeScript analysis, and Trivy CRITICAL/HIGH container scanning with SARIF upload.
-- Dependabot checks npm, Docker, and GitHub Actions dependencies weekly.
-
-The same local gate is available before opening a pull request:
-
-```bash
-npm run security:gate
-```
-
-Merge protection should require the `unit`, `postgres-integration`, `docker`, `dependency-audit`, `secret-scan`, `codeql`, and `container-scan` checks on the `main` branch.
-
-Login protection is enabled by default:
-
-- Per-process rate limiting tracks email and source IP: 10 attempts per 15-minute window.
-- PostgreSQL persists account failures; after 5 failed password or MFA attempts, the account is locked for 15 minutes.
-- `Owner` and `Admin` accounts must enroll in TOTP MFA before they can receive a session.
-- MFA secrets are encrypted with AES-256-GCM using `RECOVEROS_MASTER_KEK_HEX` and are never returned after setup except as the one-time setup response.
-- MFA setup endpoints are `POST /api/v1/auth/mfa/setup` and `POST /api/v1/auth/mfa/confirm`.
-- For multiple application replicas, put a shared rate limiter/WAF (for example, a managed gateway or Redis-backed limiter) in front of the service; the persistent account lock remains database-backed.
-
-User provisioning is server-side and tenant-scoped:
-
-- `GET /api/v1/admin/users` — Owner/Admin only; returns no password fields.
-- `POST /api/v1/admin/users` — Owner/Admin only; the server generates the user ID and forces the actor's tenant.
-- `PATCH /api/v1/admin/users/:userId` — Owner/Admin only; cross-tenant IDs are rejected, Admin cannot create/manage Owner or Admin accounts, and changing status or role revokes active sessions.
-- An actor cannot change their own role or status, and the last active Owner cannot be disabled.
-
-To provision the first user, call `AuthUserService.createUser` from a protected administrative provisioning workflow. Do not add a public signup endpoint. The login endpoint is:
-
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"user@example.com","password":"your-password"}'
-```
-
-## 2. Secrets and production requirements
-
-- `RECOVEROS_MASTER_KEK_HEX` must be supplied by a KMS or Secret Manager and must be exactly 32 bytes encoded as 64 hexadecimal characters.
-- `POSTGRES_PASSWORD` must not be committed to Git.
-- Use a managed PostgreSQL instance with encrypted storage, automated backups, point-in-time recovery, and TLS in production.
-- Set `DATABASE_SSL=true` when the managed provider requires TLS.
-- The current phase persists generic runtime records, audit entries, ingestion jobs, and the dead-letter queue. Sessions and encrypted object storage remain in the next migration phase.
-
-## 3. Containerized deployment
-
-```bash
+# 1. Build the production image with automated test validation
 docker build -t recoveros:latest .
-docker compose up -d
+
+# 2. Run with Docker Compose
+docker-compose up -d
+
+# 3. Verify health probe
+curl http://localhost:3000/healthz
 ```
 
-The image builds the browser bundle and server bundle separately, runs as a non-root user, and executes the server with Node.js without requiring development tooling at runtime.
+---
 
-## 4. Cloud Run & Kubernetes deployment
+## 2. Cloud Run & Kubernetes Deployment
 
-- **Port Configuration**: Default HTTP port is `3000`, configurable through `PORT`.
-- **Probes**:
-  - Liveness: `GET /healthz`
-  - Readiness: `GET /ready`
-- **Required Secrets**: `DATABASE_URL`, `RECOVEROS_MASTER_KEK_HEX`, and optionally `GEMINI_API_KEY`.
-- **Database**: Use an external managed PostgreSQL service, not a database container inside the application runtime.
-
-## 5. Render production deployment
-
-`render.yaml` is an infrastructure-as-code blueprint for the RecoverOS web service and a PostgreSQL 16 instance in Frankfurt. It intentionally marks encryption, Object Storage, and AI credentials as `sync: false`; enter those values through Render's secret environment-variable UI, never in Git.
-
-Before creating the Render resources:
-
-1. Create an S3-compatible bucket in `eu-central-1`, enable versioning, block public access, and create/choose a KMS key. Grant the Render runtime identity only `PutObject`, `GetObject`, `HeadObject`, and KMS encrypt/decrypt permissions for the document prefix.
-2. Generate `RECOVEROS_MASTER_KEK_HEX` with `openssl rand -hex 32` and store it in a secret manager. This key must remain stable for the lifetime of encrypted documents.
-3. Create a separate PostgreSQL backup role with `BYPASSRLS` and configure `BACKUP_DATABASE_URL` outside the application service.
-4. Add the Render secrets listed in `render.yaml`, deploy, and wait for `/ready` to return HTTP 200.
-5. Run an isolated backup and restore drill before allowing production traffic.
-
-The blueprint currently assumes `frankfurt`, Render `starter` web service, and `basic_256mb` PostgreSQL. These are editable choices; changing region or plan changes cost, latency, and capacity. Do not apply the blueprint until the region, plan, and Object Storage/KMS account are confirmed.
+*   **Port Configuration**: Default HTTP port is `3000`. Configured via standard `PORT` environment variable.
+*   **Probes**:
+    *   Liveness: `GET /healthz` (200 OK)
+    *   Readiness: `GET /ready` (200 OK)
+*   **Environment Secrets**:
+    *   `GEMINI_API_KEY`: Injected into server process for language reasoning and claim notice drafting.
+    *   `NODE_ENV`: Set to `production`.

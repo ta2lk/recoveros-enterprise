@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci --ignore-scripts
+RUN npm ci
 
 # Copy application source
 COPY . .
@@ -23,20 +23,19 @@ ENV PORT=3000
 
 # Install production dependencies only
 COPY package*.json ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm ci --only=production
 
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/dist-server ./dist-server
+COPY --from=builder /app/server.ts ./
+COPY --from=builder /app/src ./src
 
 # Non-root user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
-
-STOPSIGNAL SIGTERM
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/healthz || exit 1
 
-CMD ["node", "dist-server/server.js"]
+CMD ["npx", "tsx", "server.ts"]

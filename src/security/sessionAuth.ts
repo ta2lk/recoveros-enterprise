@@ -1,32 +1,32 @@
-import { createHash, randomBytes } from 'node:crypto';
+/**
+ * RecoverOS - Session-Derived Authentication & Tenant Context Middleware
+ * 
+ * Rules:
+ * 1. Tenant is derived from authenticated session token ONLY.
+ * 2. NEVER trust client-provided x-tenant-id headers for authorization.
+ * 3. Reject invalid or expired session tokens immediately (fail closed).
+ */
+
 import { Request, Response, NextFunction } from 'express';
-import { AuthenticatedSession, SecurityViolationError, db } from '../db/client';
+import { AuthenticatedSession, SecurityViolationError } from '../db/client';
 
 export interface AuthenticatedRequest extends Request {
   sessionContext?: AuthenticatedSession;
 }
 
-interface DurableSessionRecord {
-  id: string;
-  tenantId: string;
-  userId: string;
-  role: string;
-  tokenHash: string;
-  expiresAt: number;
-  createdAt: string;
-  revokedAt?: string;
-}
-
 export class SessionService {
   private static activeSessions: Map<string, AuthenticatedSession> = new Map();
 
+  /**
+   * Register an authenticated session (called upon successful SSO/login)
+   */
   static createSession(params: {
     userId: string;
     tenantId: string;
     role: string;
     ttlMinutes?: number;
   }): AuthenticatedSession {
-    const sessionId = `sess-${params.tenantId}-${Date.now()}-${randomBytes(16).toString('hex')}`;
+    const sessionId = `sess-${params.tenantId}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     const ttl = (params.ttlMinutes || 60) * 60 * 1000;
     const session: AuthenticatedSession = {
       sessionId,
@@ -35,97 +35,66 @@ export class SessionService {
       role: params.role,
       expiresAt: Date.now() + ttl,
     };
+
     this.activeSessions.set(sessionId, session);
     return session;
   }
 
-  static async createSessionDurable(params: {
-    userId: string;
-    tenantId: string;
-    role: string;
-    ttlMinutes?: number;
-  }): Promise<AuthenticatedSession> {
-    const token = randomBytes(32).toString('base64url');
-    const ttl = (params.ttlMinutes || 60) * 60 * 1000;
-    const session: AuthenticatedSession = {
-      sessionId: token,
-      userId: params.userId,
-      tenantId: params.tenantId,
-      role: params.role,
-      expiresAt: Date.now() + ttl,
-    };
-    const record: DurableSessionRecord = {
-      id: `session-${params.tenantId}-${randomBytes(12).toString('hex')}`,
-      tenantId: params.tenantId,
-      userId: params.userId,
-      role: params.role,
-      tokenHash: createHash('sha256').update(token, 'utf8').digest('hex'),
-      expiresAt: session.expiresAt,
-      createdAt: new Date().toISOString(),
-    };
-    await db.insertAuthSession(record);
-    return session;
-  }
-
+  /**
+   * Validate and retrieve session
+   */
   static getSession(token: string): AuthenticatedSession | null {
     if (!token) return null;
     const cleanToken = token.startsWith('Bearer ') ? token.slice(7).trim() : token.trim();
     const session = this.activeSessions.get(cleanToken);
     if (!session) return null;
+
     if (Date.now() > session.expiresAt) {
       this.activeSessions.delete(cleanToken);
       return null;
     }
+
     return session;
   }
 
-  static async getSessionDurable(token: string): Promise<AuthenticatedSession | null> {
-    if (!token) return null;
-    const cleanToken = token.startsWith('Bearer ') ? token.slice(7).trim() : token.trim();
-    if (!cleanToken || cleanToken.length < 32) return null;
-    const record = await db.findSessionByTokenHash(createHash('sha256').update(cleanToken, 'utf8').digest('hex')) as DurableSessionRecord | null;
-    if (!record || record.revokedAt || Date.now() > record.expiresAt) return null;
-    return {
-      sessionId: cleanToken,
-      userId: record.userId,
-      tenantId: record.tenantId,
-      role: record.role,
-      expiresAt: record.expiresAt,
-    };
-  }
-
+  /**
+   * Revoke session
+   */
   static revokeSession(sessionId: string): boolean {
     return this.activeSessions.delete(sessionId);
   }
 
-  static async revokeSessionDurable(session: AuthenticatedSession): Promise<boolean> {
-    const record = await db.findSessionByTokenHash(createHash('sha256').update(session.sessionId, 'utf8').digest('hex'));
-    if (!record) return false;
-    return db.revokeAuthSession(record.id);
-  }
-
+  /**
+   * Clear all sessions (testing only)
+   */
   static clear() {
     this.activeSessions.clear();
   }
 }
 
-export async function requireSessionAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
+/**
+ * Express Middleware: Enforce session-derived tenant context
+ */
+export function requireSessionAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers['authorization'];
   if (!authHeader) {
-    return res.status(401).json({ error: 'UNAUTHORIZED: Missing Authorization Bearer token.' });
+    return res.status(401).json({
+      error: 'UNAUTHORIZED: Missing Authorization Bearer token. Tenant context cannot be established.',
+    });
   }
 
-  const session = db.usesPostgres
-    ? await SessionService.getSessionDurable(authHeader)
-    : SessionService.getSession(authHeader);
+  const session = SessionService.getSession(authHeader);
   if (!session) {
-    return res.status(401).json({ error: 'UNAUTHORIZED: Invalid or expired session token.' });
+    return res.status(401).json({
+      error: 'UNAUTHORIZED: Invalid or expired session token.',
+    });
   }
 
+  // Security Invariant Check: If client attempts to spoof a different tenant via header, reject immediately
   const headerTenant = req.headers['x-tenant-id'];
   if (headerTenant && headerTenant !== session.tenantId) {
     return res.status(403).json({
-      error: `SECURITY_VIOLATION: Header tenant '${headerTenant}' conflicts with session tenant '${session.tenantId}'.`,
+      error: `SECURITY_VIOLATION: Header tenant '${headerTenant}' conflicts with session tenant '${session.tenantId}'. Spoofing detected.`,
     });
   }
 

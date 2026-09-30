@@ -76,3 +76,5 @@ export class RbacGuard {
     }
   }
 }
+
+export { RbacGuard as RoleManager };

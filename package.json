@@ -1,29 +1,17 @@
 {
-  "name": "recoveros-enterprise",
+  "name": "react-example",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build && npm run build:server",
-    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.js",
+    "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx test/run_tests.ts && tsx test/phase1_financial_correctness.test.ts && tsx test/phase2_backend_data.test.ts",
-    "test:postgres": "tsx test/postgres_persistence.test.ts",
-    "test:postgres:audit-queue": "tsx test/postgres_audit_queue.test.ts",
-    "test:postgres:auth": "tsx test/postgres_auth.test.ts",
-    "test:postgres:provisioning": "tsx test/postgres_provisioning.test.ts",
-    "test:postgres:security": "tsx test/postgres_security_controls.test.ts",
-    "test:postgres:storage": "tsx test/postgres_storage.test.ts",
-    "ops:backup": "tsx scripts/backup.ts",
-    "ops:restore": "tsx scripts/restore.ts",
-    "security:gate": "bash scripts/security-gate.sh",
-    "test:postgres:all": "npm run test:postgres && npm run test:postgres:audit-queue && npm run test:postgres:auth && npm run test:postgres:provisioning && npm run test:postgres:security && npm run test:postgres:storage"
+    "test": "tsx test/run_tests.ts && tsx test/phase1_financial_correctness.test.ts && tsx test/phase2_backend_data.test.ts && tsx test/phase3_auth_security.test.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1142.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
@@ -31,22 +19,20 @@
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
-    "pg": "^8.16.3",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^8.3.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
-    "@types/pg": "^8.15.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.28.2",
+    "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "@types/express": "^4.17.21"
   }
 }
