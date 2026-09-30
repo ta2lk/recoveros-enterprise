@@ -105,15 +105,28 @@ variable "postgres_memory_gbs" {
   default     = 8
 }
 
+variable "log_retention_days" {
+  description = "OCI Logging retention period for the application log."
+  type        = number
+  default     = 30
+}
+
 variable "object_storage_bucket_name" {
   description = "Private OCI Object Storage bucket for encrypted RecoverOS documents."
   type        = string
   default     = "recoveros-documents"
 }
 
-variable "kms_key_id" {
-  description = "OCID of an OCI Vault master encryption key. Required; do not use Oracle-managed encryption for production documents."
+variable "create_kms_resources" {
+  description = "Create a dedicated OCI Vault and AES-256 KMS key for RecoverOS documents."
+  type        = bool
+  default     = true
+}
+
+variable "existing_kms_key_id" {
+  description = "Optional existing OCI Vault key OCID. When set, it is used instead of the managed key."
   type        = string
+  default     = ""
 }
 
 variable "enable_compute" {

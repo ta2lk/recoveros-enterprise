@@ -4,17 +4,17 @@ This stack provisions the OCI foundation for RecoverOS:
 
 - VCN with a public application subnet and private PostgreSQL subnet.
 - OCI Managed PostgreSQL (`oci_psql_db_system`) with a daily backup policy. Point-in-time recovery must be enabled separately if supported by the selected OCI service/region and provider version.
-- Private, versioned OCI Object Storage bucket encrypted with an OCI Vault KMS key.
+- Dedicated OCI Vault and AES-256 KMS key, plus a private versioned Object Storage bucket encrypted with that key.
 - Optional Compute instance for a Docker host (`enable_compute = false` by default).
 
-The configuration does **not** create IAM users, API keys, or a Vault key. Those are security-sensitive tenancy resources and should be created through an approved OCI identity process. Supply the existing compartment and KMS key OCIDs as variables.
+The configuration does **not** create IAM users or API keys. It creates the document-encryption Vault/key by default; set `create_kms_resources = false` and provide `existing_kms_key_id` only when an approved key already exists.
 
 ## Prerequisites
 
 1. Terraform >= 1.6.
 2. OCI API signing key configured on the runner, or execution through OCI Resource Manager.
 3. Permission to create VCN, subnets, PostgreSQL, and Object Storage resources in the target compartment.
-4. An OCI Vault master encryption key for the document bucket.
+4. Permission to create an OCI Vault and KMS key, or an approved existing key OCID.
 5. A remote Terraform state policy. Prefer OCI Resource Manager for state, locking, and audit history; do not commit `.tfstate` files.
 
 ## CLI workflow

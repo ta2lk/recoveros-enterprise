@@ -9,7 +9,7 @@ resource "oci_objectstorage_bucket" "documents" {
   access_type    = "NoPublicAccess"
   versioning     = "Enabled"
   storage_tier   = "Standard"
-  kms_key_id     = var.kms_key_id
+  kms_key_id     = local.documents_kms_key_id
 
   freeform_tags = {
     Project   = var.project_name

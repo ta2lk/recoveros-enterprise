@@ -33,6 +33,17 @@ output "object_storage_namespace" {
   value       = data.oci_objectstorage_namespace.current.namespace
 }
 
+output "documents_kms_key_id" {
+  description = "KMS key used to encrypt the document bucket."
+  value       = local.documents_kms_key_id
+  sensitive   = true
+}
+
+output "logging_log_group_id" {
+  description = "OCI Logging group OCID for RecoverOS."
+  value       = oci_logging_log_group.recoveros.id
+}
+
 output "app_public_ip" {
   description = "Optional Compute public IP when enable_compute is true."
   value       = try(oci_core_instance.app[0].public_ip, null)

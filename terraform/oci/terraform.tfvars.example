@@ -10,8 +10,10 @@ project_name = "recoveros"
 # Use a strong password from a secret manager. Never commit the real value.
 postgres_admin_password = "REPLACE_ME_IN_SECRET_MANAGER"
 
-# OCI Vault master key OCID used for bucket SSE-KMS.
-kms_key_id = "ocid1.key.oc1..REPLACE_ME"
+# Create a dedicated Vault and AES-256 key for bucket SSE-KMS.
+create_kms_resources = true
+# Set existing_kms_key_id instead only when reusing an approved Vault key.
+existing_kms_key_id = ""
 
 # Keep false when the application will run on OKE, Container Instances, or another managed runtime.
 enable_compute = false
