@@ -24,6 +24,7 @@ import {
   Settings,
   Lock,
   Target,
+  Server,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -76,6 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
         { id: 'billing', label: t.appBilling, icon: BillingIcon },
         { id: 'settings', label: t.appSettings, icon: Settings },
         { id: 'security', label: t.appSecurity, icon: Lock },
+        { id: 'infrastructure', label: isRtl ? 'البنية السحابية OCI' : 'OCI Infrastructure', icon: Server },
       ],
     },
   ];

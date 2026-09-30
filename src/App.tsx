@@ -28,6 +28,7 @@ import { RolesPermissionsView } from './components/app/RolesPermissionsView';
 import { BillingView } from './components/app/BillingView';
 import { SettingsView } from './components/app/SettingsView';
 import { SecurityView } from './components/app/SecurityView';
+import { InfrastructureView } from './components/app/InfrastructureView';
 import { BenchmarkView } from './components/app/BenchmarkView';
 
 function AppContent() {
@@ -103,6 +104,8 @@ function AppContent() {
         return <SettingsView />;
       case 'security':
         return <SecurityView />;
+      case 'infrastructure':
+        return <InfrastructureView />;
       case 'benchmark':
         return <BenchmarkView />;
       case 'dashboard':
