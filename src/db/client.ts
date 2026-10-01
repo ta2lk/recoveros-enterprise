@@ -45,6 +45,8 @@ export class DatabaseClient {
       'payments',
       'opportunities',
       'claims',
+      'supplier_portal_magic_links',
+      'supplier_portal_responses',
       'ingestion_jobs',
       'dead_letter_queue',
       'audit_log_entries',

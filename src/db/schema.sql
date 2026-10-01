@@ -197,6 +197,31 @@ CREATE TABLE IF NOT EXISTS claims (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 12a. Supplier Dispute Portal Credentials and Responses
+CREATE TABLE IF NOT EXISTS supplier_portal_magic_links (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    claim_id VARCHAR(64) NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+    supplier_id VARCHAR(64) NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    supplier_email VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    redeemed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS supplier_portal_responses (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    claim_id VARCHAR(64) NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+    supplier_id VARCHAR(64) NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
+    action VARCHAR(32) NOT NULL,
+    reason TEXT,
+    counter_offer_minor BIGINT,
+    document_id VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- 13. Ingestion Jobs Table (Idempotent Queue)
 CREATE TABLE IF NOT EXISTS ingestion_jobs (
     id VARCHAR(64) PRIMARY KEY,
@@ -274,6 +299,8 @@ ALTER TABLE invoice_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE opportunities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE claims ENABLE ROW LEVEL SECURITY;
+ALTER TABLE supplier_portal_magic_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE supplier_portal_responses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingestion_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dead_letter_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log_entries ENABLE ROW LEVEL SECURITY;
@@ -287,5 +314,7 @@ CREATE POLICY tenant_isolation_invoices ON invoices USING (tenant_id = current_s
 CREATE POLICY tenant_isolation_payments ON payments USING (tenant_id = current_setting('app.current_tenant_id', true));
 CREATE POLICY tenant_isolation_opps ON opportunities USING (tenant_id = current_setting('app.current_tenant_id', true));
 CREATE POLICY tenant_isolation_claims ON claims USING (tenant_id = current_setting('app.current_tenant_id', true));
+CREATE POLICY tenant_isolation_supplier_portal_magic_links ON supplier_portal_magic_links USING (tenant_id = current_setting('app.current_tenant_id', true));
+CREATE POLICY tenant_isolation_supplier_portal_responses ON supplier_portal_responses USING (tenant_id = current_setting('app.current_tenant_id', true));
 CREATE POLICY tenant_isolation_jobs ON ingestion_jobs USING (tenant_id = current_setting('app.current_tenant_id', true));
 CREATE POLICY tenant_isolation_audit ON audit_log_entries USING (tenant_id = current_setting('app.current_tenant_id', true));

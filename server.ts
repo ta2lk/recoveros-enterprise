@@ -16,6 +16,7 @@ import { AuditLogService } from './src/db/auditLog';
 import { IngestionQueueService } from './src/ingestion/queue';
 import { EncryptedDocumentStorage } from './src/storage/encryptedStorage';
 import { db } from './src/db/client';
+import { SupplierDisputePortalService, SupplierPortalError, SupplierPortalClaim } from './src/portal/supplierDisputePortal';
 
 dotenv.config();
 
@@ -55,6 +56,89 @@ app.get('/api/v1/health', (req, res) => {
     mfaEnforced: true,
     fourEyesEnforced: true,
   });
+});
+
+// ---------------------------------------------------------------------------
+// Supplier Dispute Portal: one-time Magic Links, portal sessions and evidence
+// ---------------------------------------------------------------------------
+app.post('/api/v1/supplier-portal/magic-links', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const { claim, supplierEmail, baseUrl, ttlMs } = req.body as {
+    claim: SupplierPortalClaim;
+    supplierEmail: string;
+    baseUrl?: string;
+    ttlMs?: number;
+  };
+  if (!claim || !claim.claimId || !claim.tenantId || !claim.supplierId || !supplierEmail) {
+    return res.status(400).json({ error: 'Missing claim, claimId, tenantId, supplierId, or supplierEmail' });
+  }
+  try {
+    const result = SupplierDisputePortalService.issueMagicLink({
+      operatorSession: session,
+      claim,
+      supplierEmail,
+      baseUrl: baseUrl || `${req.protocol}://${req.get('host')}`,
+      ttlMs,
+    });
+    res.status(201).json(result);
+  } catch (err: any) {
+    res.status(err.name === 'SecurityViolationError' ? 403 : 400).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/supplier-portal/access', (req, res) => {
+  try {
+    if (typeof req.query.token !== 'string' || !req.query.token) throw new SupplierPortalError('MAGIC_LINK_INVALID', 'Magic link is required.');
+    res.json(SupplierDisputePortalService.redeemMagicLink(req.query.token));
+  } catch (err: any) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+function portalTokenFromRequest(req: express.Request): string {
+  const token = req.headers['x-supplier-portal-token'];
+  return typeof token === 'string' ? token : '';
+}
+
+app.get('/api/v1/supplier-portal/claims/:claimId', (req, res) => {
+  try {
+    const token = portalTokenFromRequest(req);
+    const access = SupplierDisputePortalService.authenticatePortalToken(token, req.params.claimId);
+    res.json({ claim: access.claim, responses: SupplierDisputePortalService.listResponses(token, req.params.claimId) });
+  } catch (err: any) {
+    res.status(403).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/supplier-portal/claims/:claimId/respond', (req, res) => {
+  try {
+    const result = SupplierDisputePortalService.respond({
+      portalToken: portalTokenFromRequest(req),
+      claimId: req.params.claimId,
+      action: req.body.action,
+      reason: req.body.reason,
+      counterOfferMinor: req.body.counterOfferMinor === undefined ? undefined : BigInt(req.body.counterOfferMinor),
+      documentId: req.body.documentId,
+    });
+    res.status(201).json({ ...result, counterOfferMinor: result.counterOfferMinor?.toString() });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/supplier-portal/claims/:claimId/credit-memo', async (req, res) => {
+  try {
+    const result = await SupplierDisputePortalService.uploadCreditMemo({
+      portalToken: portalTokenFromRequest(req),
+      claimId: req.params.claimId,
+      fileName: req.body.fileName,
+      mimeType: req.body.mimeType,
+      base64Content: req.body.base64Content,
+    });
+    res.status(201).json(result);
+  } catch (err: any) {
+    res.status(err.name === 'SecurityViolationError' ? 403 : 400).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

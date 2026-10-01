@@ -30,12 +30,16 @@ import { SettingsView } from './components/app/SettingsView';
 import { SecurityView } from './components/app/SecurityView';
 import { InfrastructureView } from './components/app/InfrastructureView';
 import { BenchmarkView } from './components/app/BenchmarkView';
+import { SupplierPortalPage } from './components/portal/SupplierPortalPage';
 
 function AppContent() {
   const { isRtl } = useI18n();
   const [isAppView, setIsAppView] = useState(true); // default to console to immediately showcase functionality
   const [publicView, setPublicView] = useState('home');
   const [appTab, setAppTab] = useState('dashboard');
+  if (window.location.pathname === '/supplier-portal/access') {
+    return <SupplierPortalPage />;
+  }
 
   const renderPublicView = () => {
     switch (publicView) {
