@@ -284,6 +284,10 @@ export interface Claim {
   currency: string;
   status: ClaimStatus;
   approvalRequired: boolean;
+  approvalTier?: 'AUTONOMOUS' | 'SINGLE_HUMAN' | 'FOUR_EYES';
+  shadowMode?: boolean;
+  shadowDecisionId?: string;
+  transitionReason?: string;
   approvedBy?: string;
   approvedAt?: string;
   submittedAt?: string;

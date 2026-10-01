@@ -12,6 +12,11 @@ import { GeminiAgentProvider } from '../agents/geminiProvider';
 import { CalculationEngine } from '../engine/calculation';
 import { ArchitecturalTestRunner, ArchitecturalTestReport, ArchitecturalTestStep } from '../engine/architecturalTest';
 import { BenchmarkMetrics } from '../types';
+import { evaluateApproval } from '../engine/approvalMatrix';
+import { transitionClaim } from '../engine/claimLifecycle';
+import { ShadowModeRecorder } from '../engine/shadowMode';
+
+const shadowModeRecorder = new ShadowModeRecorder();
 
 interface TenantContextType {
   state: TenantState;
@@ -132,6 +137,12 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const claim = state.claims.find((c) => c.id === claimId);
     if (!claim) return;
 
+    transitionClaim(claim.status, 'APPROVED', {
+      actorId: state.currentUser.id,
+      actorRole: state.currentUser.role,
+      reason: `Approved by ${state.currentUser.role}`,
+    });
+
     const updatedClaims = state.claims.map((c) =>
       c.id === claimId
         ? {
@@ -167,6 +178,12 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const submitClaim = (claimId: string) => {
     const claim = state.claims.find((c) => c.id === claimId);
     if (!claim) return;
+
+    transitionClaim(claim.status, 'SUBMITTED', {
+      actorId: state.currentUser.id,
+      actorRole: state.currentUser.role,
+      reason: 'Approved claim dispatched to supplier.',
+    });
 
     const updatedClaims = state.claims.map((c) =>
       c.id === claimId
@@ -388,6 +405,30 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const startClaimFromOpportunity = async (opp: Opportunity): Promise<Claim> => {
+    const approval = evaluateApproval(
+      {
+        amountUsd: opp.recoverableAmount,
+        confidencePercent: opp.confidence,
+        evidenceCount: opp.evidenceList.length,
+      },
+      {
+        autonomousAmountUsd: state.currentTenant.settings.autonomousThresholdUsd,
+        singleHumanAmountUsd: state.currentTenant.settings.highValueApprovalThresholdUsd,
+        autonomousConfidencePercent: state.currentTenant.settings.confidenceThresholdPercent,
+        requireEvidenceForAutonomous: true,
+      }
+    );
+    const isShadowMode = state.currentTenant.mode !== 'PRODUCTION';
+    const requiresHumanApproval = approval.approvalRequired || isShadowMode;
+    const shadowDecision = shadowModeRecorder.record({
+      tenantId: state.currentTenant.id,
+      agentName: opp.discoveredByAgent,
+      recommendedAction: approval.approvalRequired ? 'REQUEST_REVIEW' : 'DISPATCH',
+      confidencePercent: opp.confidence,
+      evidenceIds: opp.evidenceList.map((e) => e.id),
+      simulatedAmount: opp.recoverableAmount,
+      currency: opp.currency,
+    });
     const draft = await GeminiAgentProvider.draftClaimNotice({
       supplierName: opp.supplierName,
       claimNumber: `REC-${Date.now().toString().slice(-5)}`,
@@ -408,8 +449,12 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       supplierName: opp.supplierName,
       amount: opp.recoverableAmount,
       currency: opp.currency,
-      status: opp.recoverableAmount > state.currentTenant.settings.autonomousThresholdUsd ? 'APPROVAL_REQUIRED' : 'READY',
-      approvalRequired: opp.recoverableAmount > state.currentTenant.settings.autonomousThresholdUsd,
+      status: requiresHumanApproval ? 'APPROVAL_REQUIRED' : 'READY',
+      approvalRequired: requiresHumanApproval,
+      approvalTier: approval.tier,
+      shadowMode: isShadowMode,
+      shadowDecisionId: shadowDecision.id,
+      transitionReason: approval.reason,
       negotiationLog: [
         {
           sender: 'RECOVEROS_AGENT',
