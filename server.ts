@@ -11,7 +11,7 @@ import { CryptoAuthService } from './src/security/cryptoAuth';
 import { JwtManager } from './src/security/jwtManager';
 import { FourEyesPrincipleEngine } from './src/security/fourEyesPrinciple';
 import { PromptInjectionShield } from './src/security/promptInjectionShield';
-import { applySecurityHeaders, rateLimitByIp, authIpLimiter } from './src/security/rateLimiter';
+import { applySecurityHeaders, rateLimitByIp, authIpLimiter, portalIpLimiter } from './src/security/rateLimiter';
 import { AuditLogService } from './src/db/auditLog';
 import { IngestionQueueService } from './src/ingestion/queue';
 import { EncryptedDocumentStorage } from './src/storage/encryptedStorage';
@@ -25,12 +25,23 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+app.disable('x-powered-by');
+app.set('trust proxy', process.env.TRUST_PROXY === 'true');
+
+if (isProduction) {
+  const jwtSecret = process.env.RECOVEROS_JWT_SECRET || '';
+  const kekHex = process.env.RECOVEROS_MASTER_KEK_HEX || '';
+  if (Buffer.byteLength(jwtSecret, 'utf8') < 32 || !/^[a-f0-9]{64}$/i.test(kekHex)) {
+    throw new Error('Production startup blocked: configure RECOVEROS_JWT_SECRET and RECOVEROS_MASTER_KEK_HEX through a secret manager.');
+  }
+}
 
 // Security Headers (Helmet Equivalent)
 app.use(applySecurityHeaders);
 
 // Body parser with size limits
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '10mb', strict: true }));
 
 // General IP Rate Limiting
 app.use(rateLimitByIp());
@@ -86,7 +97,7 @@ app.post('/api/v1/supplier-portal/magic-links', requireSessionAuth, (req: Authen
   }
 });
 
-app.get('/api/v1/supplier-portal/access', (req, res) => {
+app.get('/api/v1/supplier-portal/access', rateLimitByIp(portalIpLimiter), (req, res) => {
   try {
     if (typeof req.query.token !== 'string' || !req.query.token) throw new SupplierPortalError('MAGIC_LINK_INVALID', 'Magic link is required.');
     res.json(SupplierDisputePortalService.redeemMagicLink(req.query.token));
@@ -100,7 +111,7 @@ function portalTokenFromRequest(req: express.Request): string {
   return typeof token === 'string' ? token : '';
 }
 
-app.get('/api/v1/supplier-portal/claims/:claimId', (req, res) => {
+app.get('/api/v1/supplier-portal/claims/:claimId', rateLimitByIp(portalIpLimiter), (req, res) => {
   try {
     const token = portalTokenFromRequest(req);
     const access = SupplierDisputePortalService.authenticatePortalToken(token, req.params.claimId);
@@ -110,7 +121,7 @@ app.get('/api/v1/supplier-portal/claims/:claimId', (req, res) => {
   }
 });
 
-app.post('/api/v1/supplier-portal/claims/:claimId/respond', (req, res) => {
+app.post('/api/v1/supplier-portal/claims/:claimId/respond', rateLimitByIp(portalIpLimiter), (req, res) => {
   try {
     const result = SupplierDisputePortalService.respond({
       portalToken: portalTokenFromRequest(req),
@@ -126,7 +137,7 @@ app.post('/api/v1/supplier-portal/claims/:claimId/respond', (req, res) => {
   }
 });
 
-app.post('/api/v1/supplier-portal/claims/:claimId/credit-memo', async (req, res) => {
+app.post('/api/v1/supplier-portal/claims/:claimId/credit-memo', rateLimitByIp(portalIpLimiter), async (req, res) => {
   try {
     const result = await SupplierDisputePortalService.uploadCreditMemo({
       portalToken: portalTokenFromRequest(req),
@@ -209,8 +220,9 @@ app.post('/api/v1/auth/revoke', requireSessionAuth, (req: AuthenticatedRequest, 
   res.json({ message: 'Session successfully revoked' });
 });
 
-// Legacy test session setup endpoint
+// Legacy test session setup endpoint: never expose this impersonation helper in production.
 app.post('/api/v1/auth/session', (req, res) => {
+  if (isProduction) return res.status(404).json({ error: 'Not found' });
   const { userId, tenantId, role } = req.body;
   if (!userId || !tenantId || !role) {
     return res.status(400).json({ error: 'Missing userId, tenantId, or role in request body' });

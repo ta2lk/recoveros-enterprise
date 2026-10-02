@@ -9,6 +9,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { AuthenticatedSession, SecurityViolationError } from '../db/client';
+import { JwtManager } from './jwtManager';
 
 export interface AuthenticatedRequest extends Request {
   sessionContext?: AuthenticatedSession;
@@ -83,7 +84,21 @@ export function requireSessionAuth(req: AuthenticatedRequest, res: Response, nex
     });
   }
 
-  const session = SessionService.getSession(authHeader);
+  let session = SessionService.getSession(authHeader);
+  if (!session) {
+    try {
+      const payload = JwtManager.verifyAccessToken(authHeader);
+      session = {
+        sessionId: payload.sessionId,
+        userId: payload.userId,
+        tenantId: payload.tenantId,
+        role: payload.role,
+        expiresAt: payload.exp * 1000,
+      };
+    } catch {
+      session = null;
+    }
+  }
   if (!session) {
     return res.status(401).json({
       error: 'UNAUTHORIZED: Invalid or expired session token.',

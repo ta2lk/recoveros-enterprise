@@ -138,6 +138,7 @@ console.log('\n[3] Testing Short-Lived JWTs & Refresh Token Rotation:');
   const tokens2 = JwtManager.rotateRefreshToken(tokens1.refreshToken);
   assert(tokens2.accessToken !== tokens1.accessToken, 'New short-lived access token issued upon refresh');
   assert(tokens2.refreshToken !== tokens1.refreshToken, 'New rotating refresh token issued upon refresh');
+  assert(JwtManager.verifyAccessToken(tokens2.accessToken).role === 'Finance Manager', 'Refresh rotation preserves the authenticated role');
 
   // Test 3.4: THEFT DETECTION: Re-use of old refresh token triggers token family revocation
   let theftDetected = false;

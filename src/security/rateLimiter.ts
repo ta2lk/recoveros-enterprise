@@ -58,6 +58,7 @@ export class SlidingWindowRateLimiter {
 export const ipLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 1000, maxRequests: 100 });
 export const tenantLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 1000, maxRequests: 500 });
 export const authIpLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 1000, maxRequests: 10 }); // strict for login
+export const portalIpLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 1000, maxRequests: 30 });
 
 /**
  * Middleware: Apply Enterprise Security Headers (Helmet Equivalent)
@@ -67,6 +68,7 @@ export function applySecurityHeaders(req: Request, res: Response, next: NextFunc
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   // Prevent MIME-sniffing
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   // Referrer Policy
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   // Strict Transport Security (HSTS)
@@ -74,7 +76,7 @@ export function applySecurityHeaders(req: Request, res: Response, next: NextFunc
   // Strict Content Security Policy (CSP)
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;"
+    "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:;"
   );
   next();
 }
@@ -84,7 +86,7 @@ export function applySecurityHeaders(req: Request, res: Response, next: NextFunc
  */
 export function rateLimitByIp(limiter: SlidingWindowRateLimiter = ipLimiter) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const status = limiter.check(ip);
 
     res.setHeader('X-RateLimit-Limit', 100);

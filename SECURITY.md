@@ -23,3 +23,25 @@
 *   **Viewer**: Read-only dashboard access.
 *   **Auditor**: Compliance access to immutable audit trails and reports.
 *   **AI Agent**: Sandboxed operational execution strictly within pre-configured tool policies.
+
+## 6. Production Security Gate
+
+The application intentionally fails closed in production unless `RECOVEROS_JWT_SECRET`
+and `RECOVEROS_MASTER_KEK_HEX` are injected from OCI Vault/KMS or an equivalent
+secret manager. Test-only key material is enabled only when `NODE_ENV=test`.
+
+Before accepting real customer data, the deployment owner must complete all of the
+following outside this repository:
+
+* Use OCI Vault/KMS, not `.env` files, for all secrets and configure rotation.
+* Replace the in-memory refresh-token, session, portal-link, audit and document stores
+  with the PostgreSQL/Object Storage adapters and run migrations with RLS enabled.
+* Put the service behind TLS 1.3, a WAF/reverse proxy, and a correctly configured
+  trusted proxy chain; never expose PostgreSQL publicly.
+* Run Gitleaks, Semgrep/CodeQL, Trivy, Terraform security scanning and dependency
+  review in CI, followed by an independent staging penetration test.
+* Verify backups, restore drills, alerting, incident response, log retention and key
+  rotation with evidence before production go-live.
+
+Passing unit tests is not a guarantee that the system is unhackable; production
+readiness requires these operational controls and an external security assessment.

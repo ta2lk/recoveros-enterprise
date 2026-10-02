@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log*
+.git
+.github
+.ci-workflow
+.env
+.env.*
+!.env.example
+terraform
+coverage
+dist
+*.tfvars
+*.tfstate*
+*.pem
+*.key
+*.crt

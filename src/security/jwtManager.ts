@@ -33,12 +33,12 @@ export interface RefreshTokenRecord {
   tenantId: string;
   sessionId: string;
   familyId: string;
+  role: string;
   isUsed: boolean;
   expiresAt: number;
 }
 
 export class JwtManager {
-  private static JWT_SECRET = Buffer.from('recoveros-enterprise-secret-key-32b-at-least-256-bits!', 'utf8');
   private static ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
   private static REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -47,6 +47,13 @@ export class JwtManager {
   // Revoked sessions / families
   private static revokedSessionIds: Set<string> = new Set();
   private static revokedFamilyIds: Set<string> = new Set();
+
+  private static jwtSecret(): Buffer {
+    const configured = process.env.RECOVEROS_JWT_SECRET;
+    if (configured && Buffer.byteLength(configured, 'utf8') >= 32) return Buffer.from(configured, 'utf8');
+    if (process.env.NODE_ENV === 'test') return Buffer.from('test-only-recoveros-jwt-secret-DO-NOT-USE', 'utf8');
+    throw new SecurityViolationError('RECOVEROS_JWT_SECRET is missing or shorter than 32 bytes.');
+  }
 
   /**
    * Base64Url encoding
@@ -81,7 +88,7 @@ export class JwtManager {
     const encodedHeader = this.base64UrlEncode(JSON.stringify(header));
     const encodedPayload = this.base64UrlEncode(JSON.stringify(fullPayload));
 
-    const signature = createHmac('sha256', this.JWT_SECRET)
+    const signature = createHmac('sha256', this.jwtSecret())
       .update(`${encodedHeader}.${encodedPayload}`)
       .digest();
     const encodedSignature = this.base64UrlEncode(signature);
@@ -99,7 +106,7 @@ export class JwtManager {
     }
 
     const [encodedHeader, encodedPayload, encodedSignature] = parts;
-    const expectedSignature = createHmac('sha256', this.JWT_SECRET)
+    const expectedSignature = createHmac('sha256', this.jwtSecret())
       .update(`${encodedHeader}.${encodedPayload}`)
       .digest();
     const actualSignature = Buffer.from(encodedSignature.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -151,6 +158,7 @@ export class JwtManager {
       tenantId: params.tenantId,
       sessionId,
       familyId,
+      role: params.role,
       isUsed: false,
       expiresAt: Date.now() + this.REFRESH_TOKEN_TTL_MS,
     };
@@ -196,7 +204,7 @@ export class JwtManager {
     return this.issueTokenPair({
       userId: record.userId,
       tenantId: record.tenantId,
-      role: 'Finance Manager', // preserved from session
+      role: record.role,
       sessionId: record.sessionId,
       familyId: record.familyId,
     });
