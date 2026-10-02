@@ -17,6 +17,7 @@ import { IngestionQueueService } from './src/ingestion/queue';
 import { EncryptedDocumentStorage } from './src/storage/encryptedStorage';
 import { db } from './src/db/client';
 import { SupplierDisputePortalService, SupplierPortalError, SupplierPortalClaim } from './src/portal/supplierDisputePortal';
+import { assertProductionConfiguration } from './src/config/productionGuard';
 
 dotenv.config();
 
@@ -29,13 +30,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 app.disable('x-powered-by');
 app.set('trust proxy', process.env.TRUST_PROXY === 'true');
 
-if (isProduction) {
-  const jwtSecret = process.env.RECOVEROS_JWT_SECRET || '';
-  const kekHex = process.env.RECOVEROS_MASTER_KEK_HEX || '';
-  if (Buffer.byteLength(jwtSecret, 'utf8') < 32 || !/^[a-f0-9]{64}$/i.test(kekHex)) {
-    throw new Error('Production startup blocked: configure RECOVEROS_JWT_SECRET and RECOVEROS_MASTER_KEK_HEX through a secret manager.');
-  }
-}
+assertProductionConfiguration();
 
 // Security Headers (Helmet Equivalent)
 app.use(applySecurityHeaders);
