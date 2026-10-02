@@ -1,0 +1,23 @@
+# RecoverOS staging example. Copy to terraform.tfvars only in a protected runner,
+# or map these values to an OCI Resource Manager stack variable set.
+# Never commit terraform.tfvars, private keys, passwords, or state.
+
+tenancy_ocid     = "ocid1.tenancy.oc1..REPLACE"
+user_ocid        = "ocid1.user.oc1..REPLACE"
+fingerprint      = "REPLACE_FINGERPRINT"
+private_key_path = "/secure/path/oci_api_key.pem"
+region           = "eu-frankfurt-1"
+compartment_id   = "ocid1.compartment.oc1..REPLACE"
+project_name     = "recoveros-staging"
+
+# Keep staging isolated and do not expose SSH/application ports broadly.
+admin_cidrs       = ["203.0.113.10/32"]
+app_ingress_cidrs = ["203.0.113.10/32"]
+
+postgres_admin_username = "recoveros_staging_admin"
+postgres_admin_password = "SET_IN_OCI_RESOURCE_MANAGER_SECRET"
+object_storage_bucket_name = "recoveros-staging-documents"
+create_kms_resources = true
+enable_compute = false
+
+# Review every plan. Do not use this file as a production configuration.
