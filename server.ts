@@ -17,6 +17,8 @@ import { IngestionQueueService } from './src/ingestion/queue';
 import { EncryptedDocumentStorage } from './src/storage/encryptedStorage';
 import { db } from './src/db/client';
 import { SupplierDisputePortalService, SupplierPortalError, SupplierPortalClaim } from './src/portal/supplierDisputePortal';
+import { WebhookDispatcherService } from './src/events/webhookDispatcher';
+import { SettlementAgreementService } from './src/settlement/settlementAgreement';
 import { assertProductionConfiguration } from './src/config/productionGuard';
 
 dotenv.config();
@@ -95,7 +97,16 @@ app.post('/api/v1/supplier-portal/magic-links', requireSessionAuth, (req: Authen
 app.get('/api/v1/supplier-portal/access', rateLimitByIp(portalIpLimiter), (req, res) => {
   try {
     if (typeof req.query.token !== 'string' || !req.query.token) throw new SupplierPortalError('MAGIC_LINK_INVALID', 'Magic link is required.');
-    res.json(SupplierDisputePortalService.redeemMagicLink(req.query.token));
+    const session = SupplierDisputePortalService.redeemMagicLink(req.query.token);
+    // Dispatch real-time webhook notification
+    WebhookDispatcherService.dispatchEvent(session.claim.tenantId, 'supplier.portal.viewed', {
+      claimId: session.claim.claimId,
+      claimNumber: session.claim.claimNumber,
+      supplierId: session.claim.supplierId,
+      supplierName: session.claim.supplierName,
+      viewedAt: new Date().toISOString(),
+    });
+    res.json(session);
   } catch (err: any) {
     res.status(401).json({ error: err.message });
   }
@@ -118,15 +129,56 @@ app.get('/api/v1/supplier-portal/claims/:claimId', rateLimitByIp(portalIpLimiter
 
 app.post('/api/v1/supplier-portal/claims/:claimId/respond', rateLimitByIp(portalIpLimiter), (req, res) => {
   try {
+    const token = portalTokenFromRequest(req);
+    const access = SupplierDisputePortalService.authenticatePortalToken(token, req.params.claimId);
     const result = SupplierDisputePortalService.respond({
-      portalToken: portalTokenFromRequest(req),
+      portalToken: token,
       claimId: req.params.claimId,
       action: req.body.action,
       reason: req.body.reason,
       counterOfferMinor: req.body.counterOfferMinor === undefined ? undefined : BigInt(req.body.counterOfferMinor),
       documentId: req.body.documentId,
     });
-    res.status(201).json({ ...result, counterOfferMinor: result.counterOfferMinor?.toString() });
+
+    // Dispatch webhook for dispute action
+    WebhookDispatcherService.dispatchEvent(access.claim.tenantId, `supplier.dispute.${result.action.toLowerCase()}`, {
+      claimId: result.claimId,
+      claimNumber: access.claim.claimNumber,
+      supplierId: access.claim.supplierId,
+      supplierName: access.claim.supplierName,
+      action: result.action,
+      reason: result.reason,
+      counterOfferMinor: result.counterOfferMinor?.toString(),
+      documentId: result.documentId,
+      respondedAt: result.createdAt,
+    });
+
+    // If accepted, auto-generate official settlement agreement draft
+    let agreement;
+    if (result.action === 'ACCEPT') {
+      agreement = SettlementAgreementService.generateAgreement(access.session, {
+        claimId: access.claim.claimId,
+        claimNumber: access.claim.claimNumber,
+        supplierId: access.claim.supplierId,
+        supplierName: access.claim.supplierName,
+        originalDiscrepancyAmountMinor: access.claim.amountMinor,
+        settledAmountMinor: access.claim.amountMinor,
+        currency: access.claim.currency,
+        resolutionType: 'FULL_ACCEPTANCE',
+      });
+      WebhookDispatcherService.dispatchEvent(access.claim.tenantId, 'settlement.agreement.generated', {
+        agreementId: agreement.id,
+        claimId: access.claim.claimId,
+        documentSha256: agreement.documentSha256,
+        settledAmountMinor: agreement.settledAmountMinor.toString(),
+      });
+    }
+
+    res.status(201).json({
+      ...result,
+      counterOfferMinor: result.counterOfferMinor?.toString(),
+      settlementAgreementId: agreement?.id,
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -134,16 +186,185 @@ app.post('/api/v1/supplier-portal/claims/:claimId/respond', rateLimitByIp(portal
 
 app.post('/api/v1/supplier-portal/claims/:claimId/credit-memo', rateLimitByIp(portalIpLimiter), async (req, res) => {
   try {
+    const token = portalTokenFromRequest(req);
+    const access = SupplierDisputePortalService.authenticatePortalToken(token, req.params.claimId);
     const result = await SupplierDisputePortalService.uploadCreditMemo({
-      portalToken: portalTokenFromRequest(req),
+      portalToken: token,
       claimId: req.params.claimId,
       fileName: req.body.fileName,
       mimeType: req.body.mimeType,
       base64Content: req.body.base64Content,
     });
+
+    // Dispatch webhook for uploaded credit memo
+    WebhookDispatcherService.dispatchEvent(access.claim.tenantId, 'supplier.credit_memo.uploaded', {
+      claimId: req.params.claimId,
+      supplierId: access.claim.supplierId,
+      documentId: result.documentId,
+      fileName: req.body.fileName,
+      sha256: result.sha256,
+      fileSizeBytes: result.fileSizeBytes,
+    });
+
     res.status(201).json(result);
   } catch (err: any) {
     res.status(err.name === 'SecurityViolationError' ? 403 : 400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Webhook Subscriptions & Dispatcher Endpoints
+// ---------------------------------------------------------------------------
+app.post('/api/v1/webhooks/subscriptions', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const { targetUrl, subscribedEvents, description } = req.body;
+  try {
+    const sub = WebhookDispatcherService.registerSubscription(session, {
+      targetUrl,
+      subscribedEvents: subscribedEvents || ['*'],
+      description,
+    });
+    res.status(201).json(sub);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/webhooks/subscriptions', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const subs = WebhookDispatcherService.listSubscriptions(session.tenantId);
+  res.json({ subscriptions: subs });
+});
+
+app.delete('/api/v1/webhooks/subscriptions/:id', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const success = WebhookDispatcherService.deleteSubscription(session, req.params.id);
+  res.json({ success });
+});
+
+app.get('/api/v1/webhooks/events', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const events = WebhookDispatcherService.listEventHistory(session.tenantId);
+  res.json({ events });
+});
+
+app.get('/api/v1/webhooks/deliveries', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const deliveries = WebhookDispatcherService.listDeliveryLogs(session.tenantId);
+  res.json({ deliveries });
+});
+
+app.post('/api/v1/webhooks/test-dispatch', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const { eventType, payload } = req.body;
+  const dispatchResult = WebhookDispatcherService.dispatchEvent(
+    session.tenantId,
+    eventType || 'test.ping',
+    payload || { message: 'RecoverOS Webhook Ping', timestamp: new Date().toISOString() }
+  );
+  res.json(dispatchResult);
+});
+
+// ---------------------------------------------------------------------------
+// Official Settlement Agreements Endpoints
+// ---------------------------------------------------------------------------
+app.post('/api/v1/settlement/agreements', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const {
+    claimId,
+    claimNumber,
+    supplierId,
+    supplierName,
+    creditorName,
+    originalDiscrepancyAmountMinor,
+    settledAmountMinor,
+    currency,
+    resolutionType,
+  } = req.body;
+
+  try {
+    const agreement = SettlementAgreementService.generateAgreement(session, {
+      claimId,
+      claimNumber,
+      supplierId,
+      supplierName,
+      creditorName,
+      originalDiscrepancyAmountMinor: BigInt(originalDiscrepancyAmountMinor),
+      settledAmountMinor: BigInt(settledAmountMinor),
+      currency: currency || 'USD',
+      resolutionType,
+    });
+
+    WebhookDispatcherService.dispatchEvent(session.tenantId, 'settlement.agreement.generated', {
+      agreementId: agreement.id,
+      claimId: agreement.claimId,
+      documentSha256: agreement.documentSha256,
+      settledAmountMinor: agreement.settledAmountMinor.toString(),
+    });
+
+    res.status(201).json({
+      ...agreement,
+      originalDiscrepancyAmountMinor: agreement.originalDiscrepancyAmountMinor.toString(),
+      settledAmountMinor: agreement.settledAmountMinor.toString(),
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/settlement/agreements/:id', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const ag = SettlementAgreementService.getAgreement(session.tenantId, req.params.id);
+  if (!ag) return res.status(404).json({ error: 'Settlement agreement not found' });
+
+  res.json({
+    ...ag,
+    originalDiscrepancyAmountMinor: ag.originalDiscrepancyAmountMinor.toString(),
+    settledAmountMinor: ag.settledAmountMinor.toString(),
+  });
+});
+
+app.get('/api/v1/settlement/agreements/claim/:claimId', requireSessionAuth, (req: AuthenticatedRequest, res) => {
+  const session = req.sessionContext!;
+  const ag = SettlementAgreementService.findAgreementByClaimId(session.tenantId, req.params.claimId);
+  if (!ag) return res.status(404).json({ error: 'No settlement agreement found for claim' });
+
+  res.json({
+    ...ag,
+    originalDiscrepancyAmountMinor: ag.originalDiscrepancyAmountMinor.toString(),
+    settledAmountMinor: ag.settledAmountMinor.toString(),
+  });
+});
+
+app.post('/api/v1/settlement/agreements/:id/sign-supplier', rateLimitByIp(portalIpLimiter), (req, res) => {
+  const { supplierEmail, supplierSignerName } = req.body;
+  if (!supplierEmail || !supplierSignerName) {
+    return res.status(400).json({ error: 'Missing supplierEmail or supplierSignerName' });
+  }
+
+  try {
+    const executed = SettlementAgreementService.signSupplierAgreement({
+      agreementId: req.params.id,
+      supplierEmail,
+      supplierSignerName,
+      ipAddress: req.ip || '127.0.0.1',
+    });
+
+    WebhookDispatcherService.dispatchEvent(executed.tenantId, 'settlement.agreement.executed', {
+      agreementId: executed.id,
+      claimId: executed.claimId,
+      signerName: supplierSignerName,
+      signedAt: executed.supplierSigner?.signedAt,
+      signatureHash: executed.supplierSigner?.signatureHash,
+    });
+
+    res.json({
+      ...executed,
+      originalDiscrepancyAmountMinor: executed.originalDiscrepancyAmountMinor.toString(),
+      settledAmountMinor: executed.settledAmountMinor.toString(),
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
   }
 });
 

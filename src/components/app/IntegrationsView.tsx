@@ -210,6 +210,62 @@ export const IntegrationsView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Real-time Enterprise Webhooks & Integration Dispatcher */}
+      <div className="p-6 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-neutral-200 dark:border-neutral-800">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                <Link2 className="w-4 h-4" />
+              </div>
+              <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
+                {isRtl ? 'بث أحداث الـ Webhooks في الوقت الفعلي' : 'Real-time Webhook Events & Dispatcher'}
+              </h3>
+            </div>
+            <p className="text-xs text-neutral-500 mt-1">
+              {isRtl
+                ? 'إشعارات لحظية بتوقيع HMAC-SHA256 عند فتح روابط الموردين، قبول المطالبات، أو إرفاق إشعارات الدائن'
+                : 'Cryptographically signed HMAC-SHA256 event streaming for supplier portal views, dispute actions, and credit memo uploads.'}
+            </p>
+          </div>
+          <span className="px-2.5 py-1 text-[11px] font-mono font-semibold bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 rounded-md">
+            HMAC-SHA256 Active
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-mono">
+            <div className="font-bold text-neutral-900 dark:text-neutral-100">supplier.portal.viewed</div>
+            <p className="text-[11px] font-sans text-neutral-500 mt-0.5">
+              Fires when a supplier accesses the dispute link via single-use magic token.
+            </p>
+          </div>
+
+          <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-mono">
+            <div className="font-bold text-neutral-900 dark:text-neutral-100">supplier.dispute.accepted</div>
+            <p className="text-[11px] font-sans text-neutral-500 mt-0.5">
+              Fires when a supplier accepts a claim and triggers settlement agreement drafting.
+            </p>
+          </div>
+
+          <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-mono">
+            <div className="font-bold text-neutral-900 dark:text-neutral-100">supplier.credit_memo.uploaded</div>
+            <p className="text-[11px] font-sans text-neutral-500 mt-0.5">
+              Fires when proof is uploaded, antivirus verified, and envelope-encrypted.
+            </p>
+          </div>
+        </div>
+
+        <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 flex items-center justify-between text-xs">
+          <div className="text-neutral-500 text-[11px]">
+            Endpoint: <code className="font-mono text-emerald-600">/api/v1/webhooks/subscriptions</code>
+          </div>
+          <span className="flex items-center gap-1.5 text-emerald-600 font-medium text-[11px]">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Replay Defense &lt;5min Tolerance
+          </span>
+        </div>
+      </div>
     </div>
   );
 };

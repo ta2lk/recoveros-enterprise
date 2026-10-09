@@ -17,7 +17,9 @@ import {
 import { RbacGuard } from '../../security/rbac';
 import { AuditDossierModal } from './AuditDossierModal';
 import { VendorDisputePortalModal } from './VendorDisputePortalModal';
-import { Handshake, FileCheck } from 'lucide-react';
+import { SupplierMagicLinkModal } from './SupplierMagicLinkModal';
+import { SettlementAgreementModal } from './SettlementAgreementModal';
+import { Handshake, FileCheck, Link2, FileText } from 'lucide-react';
 
 export const ClaimsView: React.FC = () => {
   const { t, formatCurrency, formatDate, isRtl } = useI18n();
@@ -26,6 +28,8 @@ export const ClaimsView: React.FC = () => {
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
   const [dossierClaim, setDossierClaim] = useState<Claim | null>(null);
   const [disputeClaim, setDisputeClaim] = useState<Claim | null>(null);
+  const [magicLinkClaim, setMagicLinkClaim] = useState<Claim | null>(null);
+  const [settlementClaim, setSettlementClaim] = useState<Claim | null>(null);
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
   const [settleAmount, setSettleAmount] = useState<number>(0);
   const [settleRef, setSettleRef] = useState('');
@@ -206,6 +210,16 @@ export const ClaimsView: React.FC = () => {
                             <Button
                               variant="secondary"
                               size="sm"
+                              onClick={() => setMagicLinkClaim(claim)}
+                              title={isRtl ? 'إصدار رابط سري للمورد' : 'Issue Supplier Magic Link'}
+                            >
+                              <Link2 className="w-3 h-3 text-sky-500" />
+                              <span>{isRtl ? 'رابط المورد' : 'Magic Link'}</span>
+                            </Button>
+
+                            <Button
+                              variant="secondary"
+                              size="sm"
                               onClick={() => handleOpenSettle(claim)}
                             >
                               <DollarSign className="w-3 h-3 text-emerald-600" />
@@ -213,6 +227,16 @@ export const ClaimsView: React.FC = () => {
                             </Button>
                           </>
                         )}
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSettlementClaim(claim)}
+                          title={isRtl ? 'عرض اتفاقية التسوية الرسمية' : 'View Settlement Agreement'}
+                        >
+                          <FileText className="w-3 h-3 text-emerald-600" />
+                          <span>{isRtl ? 'الاتفاقية' : 'Agreement'}</span>
+                        </Button>
 
                         <Button
                           variant="ghost"
@@ -403,6 +427,20 @@ export const ClaimsView: React.FC = () => {
         onResolveSettlement={(c) => {
           handleOpenSettle(c);
         }}
+      />
+
+      {/* Supplier Magic Link Generator Modal */}
+      <SupplierMagicLinkModal
+        isOpen={!!magicLinkClaim}
+        onClose={() => setMagicLinkClaim(null)}
+        claim={magicLinkClaim}
+      />
+
+      {/* Official Mutual Settlement Agreement Modal */}
+      <SettlementAgreementModal
+        isOpen={!!settlementClaim}
+        onClose={() => setSettlementClaim(null)}
+        claim={settlementClaim}
       />
     </div>
   );
